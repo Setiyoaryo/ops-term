@@ -48,8 +48,11 @@ jobs:
         run: |
           python3 scripts/build_guard.py -- python3 -m unittest scripts/test_pages.py
           npm run pages:build -- --live-release
-      - name: Install browser
-        run: npx playwright install --with-deps chromium
+      - name: Install headless browser
+        # Ubuntu hosted runners already include Chrome runtime libraries.
+        # Avoid reinstalling unrelated system fonts from a slow apt mirror.
+        timeout-minutes: 3
+        run: npx playwright install chromium --only-shell
       - name: Check desktop and mobile interactions
         run: npm run pages:test
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
