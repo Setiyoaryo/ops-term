@@ -16,6 +16,8 @@ Idle tabs are cheap in every client.
 
 ## egui client (`opsterm-egui`) — custom-rendered, no toolkit/webview
 
+**Public release v0.1.1:** source and signed Linux x86_64 assets are published on GitHub. Default HTTPS update checks, real old-to-new installation/rollback, CI and the release workflow are verified. [Evidence and next-release instructions](docs/github-release-2026-10-26.md).
+
 Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia di Settings. Penyimpanan, pergantian warna dan restart diuji melalui GUI asli. [Panduan dan verifikasi](docs/terminal-appearance-2026-10-26.md).
 
 26 Oktober 2026: perbaikan hover X, scroll terminal per piksel dan kecepatan wheel 2×, serta pengurangan atlas font telah diuji. Hasil desktop: RSS idle 94,61 → 90,42 MiB; target 15–30 MiB RSS belum tercapai. [Laporan pengukuran dan verifikasi](docs/performance-2026-10-26.md).
