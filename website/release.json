@@ -1,9 +1,1 @@
-{
-  "tag_name": "v0.1.1",
-  "draft": false,
-  "prerelease": false,
-  "assets": [{
-    "name": "opsterm-egui-0.1.1-linux-x86_64",
-    "browser_download_url": "https://github.com/Setiyoaryo/ops-term/releases/download/v0.1.1/opsterm-egui-0.1.1-linux-x86_64"
-  }]
-}
+{"assets":[{"browser_download_url":"https://github.com/Setiyoaryo/ops-term/releases/download/v0.1.2/opsterm-egui-0.1.2-linux-x86_64","name":"opsterm-egui-0.1.2-linux-x86_64"}],"draft":false,"prerelease":false,"tag_name":"v0.1.2"}

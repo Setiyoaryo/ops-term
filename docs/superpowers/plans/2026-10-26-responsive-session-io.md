@@ -9,6 +9,8 @@ Design: wrap real opened transports at the connection-worker boundary. A bounded
 - [x] Add regression tests with deliberately blocked writes/resize/shutdown, ordered input, bounded queue, cancellation and real PTY backpressure.
 - [x] Implement worker adapter, error reporting and bind it to real connection setup; preserve test seams.
 - [x] Remove the importer from egui and React, delete its dedicated tests and remove product-comparison references from current documentation. Preserve generic CSV/TSV and saved data.
-- [ ] Run guarded Rust tests/clippy, frontend checks and relevant smoke tests; review; build/install verified binary without terminating active user sessions; clean generated caches.
+- [x] Run guarded Rust tests/clippy, frontend checks and relevant smoke tests; review; build/install verified binary without terminating active user sessions; clean generated caches.
 
 Additional evidence and final validation: [responsiveness report](../../responsiveness-2026-10-26.md). Native quick Ctrl+C handling was also reproduced and fixed; Shift+Arrow shortcuts are unchanged.
+
+Signed v0.1.2 published, installed through the trusted updater, and verified with a real GUI smoke. Public website download automatically refreshed. Existing user window remains open and needs a user-controlled restart.

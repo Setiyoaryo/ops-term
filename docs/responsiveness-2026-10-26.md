@@ -28,3 +28,13 @@ Commands use the guarded entry points described in AGENTS.md. Generated build/te
 ## Limits
 
 The user's intermittent freeze was not observed in the already-running process, which was idle during inspection. These fixes address reproduced blocking-I/O paths and do not establish that every possible stall shares the same cause. Vault/keyring operations, filesystem latency and graphics-driver stalls need separate reproduction if they persist. This change does not claim a new total-RSS target.
+
+## Published and installed
+
+The signed [v0.1.2 release](https://github.com/Setiyoaryo/ops-term/releases/tag/v0.1.2) is public. [CI](https://github.com/Setiyoaryo/ops-term/actions/runs/40346710259), [release verification](https://github.com/Setiyoaryo/ops-term/actions/runs/40346732847), and [automatic website refresh](https://github.com/Setiyoaryo/ops-term/actions/runs/40349751716) passed.
+
+The previously trusted v0.1.1 updater detected v0.1.2 and installed it after signature/hash verification. The installed binary subsequently reported `OpsTerm v0.1.2 is up to date`; its SHA-256 independently matches the public manifest:
+
+`edd504574b60d9781f82383f04b4c75799bc538ae239f0c9c33a6b30c122eabe`
+
+The full native GUI smoke also passed against that installed release binary, including continuous output and interruption on the busy first tab. The existing user window was left running; it must be restarted by the user to load the new executable. No user inventory, vault or active sessions were deleted. Generated workspace caches were cleaned after verification.
