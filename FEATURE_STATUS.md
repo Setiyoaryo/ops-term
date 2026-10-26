@@ -1,5 +1,8 @@
 # Feature Status
 
+27 Oktober 2026 — v0.1.3: paste clipboard gambar ke CLI agent dan konfirmasi X tab/aplikasi/restart. PNG diuji pada clipboard asli dan composer Codex. [Bukti pengujian](docs/image-paste-close-2026-10-27.md).
+
+
 26 Oktober 2026 — v0.1.2: operasi transport egui dipindahkan ke worker dengan antrean terbatas; shutdown Telnet, retry resize, dan Ctrl+C native diuji. Importer pihak ketiga lama dihapus; CSV tetap tersedia. [Bukti pengujian](docs/responsiveness-2026-10-26.md).
 
 

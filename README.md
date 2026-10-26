@@ -67,6 +67,18 @@ select all · `Ctrl+V` paste · double-click selects a word · mouse wheel or
 `Shift+PageUp`/`Shift+PageDown` scrolls history. In the command editor, `Enter`
 sends and `Shift+Enter` inserts a new line. Scratchpad is available under View.
 
+Clipboard images: with a CLI agent such as Codex in the terminal, `Ctrl+V` or
+`Ctrl+Shift+V` forwards its image-paste shortcut when the clipboard has no text.
+Text paste keeps its existing behavior. The agent reads the clipboard itself;
+OpsTerm does not create image files or upload the local clipboard over SSH.
+The clipboard must be available where the agent runs.
+
+Tab X and `Ctrl+Shift+W` ask before closing a tab, including disconnected tabs
+that still contain output. Window X and update restart also ask while tabs are
+open. **Cancel** receives initial focus; **Escape** cancels; **Ctrl+Enter**
+confirms after the prompt has been shown. Cancelling restores the previously
+focused field or terminal. Settings/help dialogs keep their normal close behavior.
+
 The default workspace uses a minimal dark theme with a flat terminal surface.
 Click a device row once to open its tab immediately; connection setup runs in
 the background. Clicking an open device focuses its existing tab. Right-click

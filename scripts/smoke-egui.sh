@@ -118,6 +118,8 @@ done
 [[ -f "$smoke_data/responsive-under-output" ]] || { echo 'UI stalled during continuous output' >&2; exit 1; }
 xdotool key ctrl+shift+w
 sleep 0.2
+xdotool key ctrl+Return
+sleep 0.2
 # Closing the last tab selects SECOND, so explicitly return to busy FIRST.
 xdotool mousemove --window "$smoke_window" 45 63 click 1
 xdotool mousemove --window "$smoke_window" 450 300 click 1

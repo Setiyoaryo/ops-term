@@ -33,6 +33,7 @@ use opsterm_core::{security, storage::Database};
 
 mod appearance;
 mod background;
+mod close_confirmation;
 mod command_input;
 mod connections;
 mod device_list;
@@ -924,6 +925,10 @@ struct App {
     sessions: Vec<Session>,
     active: usize,
     terminal_focus: Option<u64>,
+    close_confirmation: close_confirmation::Confirmation,
+    allow_close: bool,
+    close_input_blocked: bool,
+    close_blocked_frame: Option<u64>,
     quick: String,
     command: String,
     font_size: f32,
@@ -1072,6 +1077,10 @@ impl App {
             sessions: Vec::new(),
             active: 0,
             terminal_focus: None,
+            close_confirmation: close_confirmation::Confirmation::default(),
+            allow_close: false,
+            close_input_blocked: false,
+            close_blocked_frame: None,
             quick: String::new(),
             command: String::new(),
             font_size: DEFAULT_TERM_FONT,
@@ -2334,6 +2343,9 @@ impl App {
     }
 
     fn send_command(&mut self, with_enter: bool) {
+        if self.close_input_blocked || self.close_confirmation.active() {
+            return;
+        }
         let mut bytes = command_input::normalize(&self.command).into_bytes();
         if with_enter && !bytes.ends_with(b"\r") {
             bytes.push(b'\r');
@@ -2471,7 +2483,10 @@ impl App {
             Vec2::new(cols as f32 * cell_w, rows as f32 * cell_h),
         );
         let resp = ui.allocate_rect(grid, egui::Sense::click_and_drag());
-        if active == self.active && self.terminal_focus == Some(self.sessions[active].id) {
+        if !self.close_input_blocked
+            && active == self.active
+            && self.terminal_focus == Some(self.sessions[active].id)
+        {
             resp.request_focus();
             self.terminal_focus = None;
         }
@@ -2676,7 +2691,11 @@ impl App {
             self.sessions[active].clear_selection();
         }
 
-        if resp.has_focus() && active == self.active {
+        if resp.has_focus()
+            && active == self.active
+            && !self.close_input_blocked
+            && !self.close_confirmation.active()
+        {
             let mut out: Vec<u8> = Vec::new();
             let mut copy = false;
             let mut interrupted = false;
@@ -3137,6 +3156,58 @@ impl App {
         } else {
             self.active
         };
+    }
+
+    fn request_close_tab(&mut self, index: usize) {
+        let Some(session) = self.sessions.get(index) else {
+            return;
+        };
+        self.close_input_blocked = true;
+        self.close_blocked_frame = self.context.as_ref().map(|ctx| ctx.cumulative_frame_nr());
+        self.close_confirmation
+            .request(close_confirmation::Target::Tab {
+                id: session.id,
+                title: session.title.clone(),
+            });
+        if let Some(ctx) = &self.context {
+            close_confirmation::discard_background_keyboard(ctx);
+        }
+    }
+
+    fn protect_window_close(&mut self, ctx: &egui::Context) {
+        if !self.allow_close
+            && self.close_blocked_frame != Some(ctx.cumulative_frame_nr())
+            && ctx.input(|i| i.viewport().close_requested())
+            && !self.sessions.is_empty()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_confirmation
+                .request(close_confirmation::Target::Application {
+                    sessions: self.sessions.len(),
+                });
+        }
+    }
+
+    fn confirm_close(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.close_confirmation.show(ctx) else {
+            return;
+        };
+        match target {
+            close_confirmation::Target::Tab { id, .. } => {
+                if let Some(index) = self.sessions.iter().position(|session| session.id == id) {
+                    self.close_tab(index);
+                }
+                self.terminal_focus = self.sessions.get(self.active).map(|session| session.id);
+            }
+            close_confirmation::Target::Application { .. } => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            close_confirmation::Target::Restart { path, .. } => match update::restart(&path) {
+                Ok(()) => std::process::exit(0),
+                Err(error) => self.updater.error = Some(error),
+            },
+        }
     }
 
     fn close_tab(&mut self, index: usize) {
@@ -3723,6 +3794,7 @@ fn key_to_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
         PageDown => b"\x1b[6~".to_vec(),
         A if ctrl => vec![0x01],
         C if ctrl => vec![0x03],
+        V if ctrl => vec![0x16],
         D if ctrl => vec![0x04],
         E if ctrl => vec![0x05],
         F if ctrl => vec![0x06],
@@ -3831,6 +3903,18 @@ impl App {
         }
         let ctx = ui.ctx().clone();
         self.context = Some(ctx.clone());
+        self.close_confirmation.restore_previous_focus(&ctx);
+        self.protect_window_close(&ctx);
+        if self.close_confirmation.active() {
+            self.close_blocked_frame = Some(ctx.cumulative_frame_nr());
+        }
+        self.close_input_blocked = self.close_confirmation.active()
+            || self.close_blocked_frame == Some(ctx.cumulative_frame_nr());
+        let close_drawn_early = self.close_input_blocked;
+        if close_drawn_early {
+            self.confirm_close(&ctx);
+            close_confirmation::discard_background_keyboard(&ctx);
+        }
         if (self.scroll_speed - self.applied_scroll_speed).abs() > 0.1 {
             ctx.options_mut(|options| {
                 options.input_options.line_scroll_speed = self.scroll_speed * 2.0;
@@ -3883,23 +3967,25 @@ impl App {
             p.task.bind(&ctx);
         }
 
-        if ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
-        }) {
-            self.new_local();
-        }
-        if ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
-        }) {
-            self.composer_open = !self.composer_open;
-        }
-        if ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::W)
-        }) {
-            self.close_tab(self.active);
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)) {
-            self.show_settings = true;
+        if !self.close_input_blocked && !self.close_confirmation.active() {
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
+            }) {
+                self.new_local();
+            }
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
+            }) {
+                self.composer_open = !self.composer_open;
+            }
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::W)
+            }) {
+                self.request_close_tab(self.active);
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)) {
+                self.show_settings = true;
+            }
         }
         let mut zoom_changed = false;
         ctx.input(|i| {
@@ -4255,7 +4341,7 @@ impl App {
                     }
                     if let Some(id) = remove {
                         if let Some(i) = self.sessions.iter().position(|s| s.id == id) {
-                            self.close_tab(i);
+                            self.request_close_tab(i);
                         }
                     }
                     if ui
@@ -5634,6 +5720,12 @@ impl App {
 
         self.folder_windows(&ctx);
         self.update_window(&ctx);
+        if !close_drawn_early {
+            self.confirm_close(&ctx);
+        }
+        if !self.close_input_blocked && !self.close_confirmation.active() {
+            self.close_confirmation.remember_background_focus(&ctx);
+        }
     }
 
     fn folder_windows(&mut self, ctx: &egui::Context) {
@@ -5881,9 +5973,18 @@ impl App {
         }
         if restart_now {
             if let Some(path) = updater.installed.clone() {
-                match update::restart(&path) {
-                    Ok(()) => std::process::exit(0),
-                    Err(error) => updater.error = Some(error),
+                if !self.sessions.is_empty() {
+                    self.close_confirmation
+                        .request(close_confirmation::Target::Restart {
+                            path,
+                            sessions: self.sessions.len(),
+                        });
+                    close_confirmation::discard_background_keyboard(ctx);
+                } else {
+                    match update::restart(&path) {
+                        Ok(()) => std::process::exit(0),
+                        Err(error) => updater.error = Some(error),
+                    }
                 }
             }
         }
@@ -7404,6 +7505,298 @@ mod tests {
             "final size was not retried after backpressure"
         );
         assert_eq!((session.cols, session.rows), (120, 40));
+    }
+
+    #[test]
+    fn regression_agent_image_paste_key_reaches_the_terminal() {
+        assert_eq!(
+            key_to_bytes(egui::Key::V, egui::Modifiers::CTRL),
+            Some(vec![0x16])
+        );
+    }
+
+    #[test]
+    fn regression_close_shortcut_keeps_live_session_until_confirmed() {
+        let mut app = test_app();
+        let (session, _) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        let modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+            modifiers,
+            events: vec![egui::Event::Key {
+                key: egui::Key::W,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| app.show(ui));
+        assert_eq!(
+            app.sessions.len(),
+            1,
+            "live session closed before confirmation"
+        );
+    }
+
+    fn close_test_frame(
+        app: &mut App,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        native_close: bool,
+    ) -> egui::FullOutput {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+            events,
+            ..Default::default()
+        };
+        if native_close {
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .events
+                .push(egui::ViewportEvent::Close);
+        }
+        ctx.run_ui(input, |ui| app.show(ui))
+    }
+    fn close_test_key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn regression_native_close_enter_does_not_submit_background_composer() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        app.composer_open = true;
+        app.command = "must stay in editor".into();
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], false);
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("command-editor")));
+        close_test_frame(&mut app, &ctx, vec![], false);
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::NONE)],
+            true,
+        );
+        assert!(
+            writes.lock().unwrap().is_empty(),
+            "native close leaked Enter to the command composer"
+        );
+        assert_eq!(app.command, "must stay in editor");
+        assert_eq!(app.sessions.len(), 1);
+    }
+
+    #[test]
+    fn close_confirmation_keeps_target_identity_after_tab_reorder() {
+        let mut app = test_app();
+        let (first, _) = test_session(std::io::empty());
+        let first_id = first.id;
+        let (second, _) = test_session(std::io::empty());
+        let second_id = second.id;
+        app.sessions.extend([first, second]);
+        app.fonts_ready = true;
+        app.request_close_tab(0);
+        app.move_tab(0, 1);
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], false);
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::CTRL)],
+            false,
+        );
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.sessions[0].id, second_id);
+        assert_ne!(app.sessions[0].id, first_id);
+    }
+
+    #[test]
+    fn native_close_is_cancelled_until_explicit_confirmation() {
+        let mut app = test_app();
+        let (session, _) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        let output = close_test_frame(&mut app, &ctx, vec![], true);
+        assert!(output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(!app.allow_close);
+        assert_eq!(app.sessions.len(), 1);
+        let output = close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::CTRL)],
+            false,
+        );
+        assert!(app.allow_close);
+        assert!(output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::Close));
+    }
+
+    #[test]
+    fn cancelling_native_close_restores_terminal_focus_without_a_click() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.terminal_focus = Some(session.id);
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], false);
+        let original = ctx.memory(|memory| memory.focused());
+        assert!(original.is_some());
+        close_test_frame(&mut app, &ctx, vec![], true);
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Escape, egui::Modifiers::NONE)],
+            false,
+        );
+        // The next native input frame must already be ready for typing.
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("typed after cancel".into())],
+            false,
+        );
+        assert_eq!(&*writes.lock().unwrap(), b"typed after cancel");
+        assert_eq!(ctx.memory(|memory| memory.focused()), original);
+    }
+
+    #[test]
+    fn native_close_enter_cancel_is_not_reopened_by_layout_replay() {
+        let mut app = test_app();
+        let (session, _) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], true);
+        // Cancel already has focus; a repeated native close arrives with Enter.
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::NONE)],
+            true,
+        );
+        assert!(
+            !app.close_confirmation.active(),
+            "the same native close event reopened a cancelled dialog"
+        );
+        assert!(!app.allow_close);
+        assert_eq!(app.sessions.len(), 1);
+    }
+
+    #[test]
+    fn disconnected_tab_output_is_not_closed_without_confirmation() {
+        let mut app = test_app();
+        let (mut session, _) = test_session(std::io::empty());
+        session.exited = true;
+        app.sessions.push(session);
+        app.request_close_tab(0);
+        assert_eq!(
+            app.sessions.len(),
+            1,
+            "disconnected tab output was removed without confirmation"
+        );
+        assert!(app.close_confirmation.active());
+    }
+
+    #[test]
+    fn regression_native_close_enter_does_not_launch_quick_connect() {
+        let mut app = test_app();
+        let _release = hold_connection_workers(&mut app);
+        let (session, _) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        app.quick = "ops@127.0.0.1:1".into();
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], false);
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("quick-connect")));
+        close_test_frame(&mut app, &ctx, vec![], false);
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::NONE)],
+            true,
+        );
+        assert_eq!(
+            app.sessions.len(),
+            1,
+            "native-close Enter opened a background connection"
+        );
+        assert_eq!(app.quick, "ops@127.0.0.1:1");
+        assert!(app.queued_connections.is_empty());
+    }
+
+    #[test]
+    fn regression_close_all_requires_showing_the_new_prompt_before_confirming() {
+        let mut app = test_app();
+        let (first, _) = test_session(std::io::empty());
+        let (second, _) = test_session(std::io::empty());
+        app.sessions.extend([first, second]);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        app.request_close_tab(0);
+        close_test_frame(&mut app, &ctx, vec![], false);
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::CTRL)],
+            true,
+        );
+        assert!(
+            !app.allow_close,
+            "a close-one confirmation was reused to approve closing all tabs"
+        );
+        assert!(app.close_confirmation.active());
+        assert_eq!(app.sessions.len(), 2);
+    }
+
+    #[test]
+    fn cancelling_tab_close_restores_previously_focused_editor() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        app.quick = "saved text".into();
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], false);
+        let editor = egui::Id::new("quick-connect");
+        ctx.memory_mut(|memory| memory.request_focus(editor));
+        close_test_frame(&mut app, &ctx, vec![], false);
+        app.request_close_tab(0);
+        close_test_frame(&mut app, &ctx, vec![], false);
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Escape, egui::Modifiers::NONE)],
+            false,
+        );
+        close_test_frame(&mut app, &ctx, vec![], false);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(editor));
+        close_test_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text(" suffix".into())],
+            false,
+        );
+        assert_eq!(app.quick, "saved text suffix");
+        assert!(writes.lock().unwrap().is_empty());
     }
 
     struct BurstReader(Arc<AtomicUsize>);

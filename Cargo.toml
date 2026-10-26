@@ -2,6 +2,7 @@
 resolver = "2"
 members = ["core", "src-tauri", "native", "egui"]
 default-members = ["core", "egui"]
+exclude = ["vendor/egui-winit"]
 
 [profile.dev]
 debug = 0
@@ -12,3 +13,7 @@ lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[patch.crates-io]
+# Preserve agent paste keys when the native clipboard has no text.
+egui-winit = { path = "vendor/egui-winit" }
