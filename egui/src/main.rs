@@ -39,6 +39,7 @@ mod device_list;
 mod quick_connect;
 mod remote_files;
 mod repaint;
+mod session_io;
 mod terminal_render;
 mod update;
 use connections::Origin;
@@ -243,6 +244,7 @@ struct Session {
     opening: bool,
     connection_error: Option<String>,
     wake: repaint::Wake,
+    io_status: Option<session_io::Status>,
 }
 
 impl Session {
@@ -322,6 +324,7 @@ impl Session {
             opening: false,
             connection_error: None,
             wake,
+            io_status: None,
         }
     }
 
@@ -469,6 +472,13 @@ impl Session {
         if self.opening {
             return;
         }
+        if let Some(error) = self
+            .io_status
+            .as_ref()
+            .and_then(|status| status.take_error())
+        {
+            self.connection_error = Some(error);
+        }
         let started = Instant::now();
         let mut received = false;
         for _ in 0..8 {
@@ -507,18 +517,25 @@ impl Session {
         if cols == 0 || rows == 0 || (cols == self.cols && rows == self.rows) {
             return;
         }
+        if self
+            .provider
+            .resize(TerminalDimensions {
+                cols: cols as u16,
+                rows: rows as u16,
+            })
+            .is_err()
+        {
+            // Keep the cached size unchanged so the next frame retries.
+            return;
+        }
         self.scroll_pixels = 0.0;
         self.cols = cols;
         self.rows = rows;
         self.term.resize(Size { cols, rows });
-        let _ = self.provider.resize(TerminalDimensions {
-            cols: cols as u16,
-            rows: rows as u16,
-        });
     }
 
-    fn write(&self, data: &[u8]) {
-        let _ = self.provider.write(data);
+    fn write(&self, data: &[u8]) -> opsterm_core::error::AppResult<()> {
+        self.provider.write(data)
     }
 
     fn key_bytes(&self, key: egui::Key, modifiers: egui::Modifiers) -> Option<Vec<u8>> {
@@ -922,7 +939,6 @@ struct App {
     import_open: bool,
     import_text: String,
     import_msg: String,
-    crt_path: String,
     search: String,
     search_open: bool,
     tunnels: TunnelManager,
@@ -1071,7 +1087,6 @@ impl App {
             import_open: false,
             import_text: String::new(),
             import_msg: String::new(),
-            crt_path: String::new(),
             search: String::new(),
             search_open: false,
             tunnels: TunnelManager::new(),
@@ -2157,6 +2172,7 @@ impl App {
                 request.saved.as_ref().map(|s| s.id.clone()),
                 request.origin,
             );
+            session.io_status = opened.1.take();
             if let Some(ctx) = &self.context {
                 session.wake.bind(ctx);
             }
@@ -2359,9 +2375,9 @@ impl App {
             }
         }
         self.flash = if failures.is_empty() {
-            format!("Sent to {sent} session(s)")
+            format!("Queued for {sent} session(s)")
         } else {
-            format!("Sent to {sent}; failed: {}", failures.join("; "))
+            format!("Queued for {sent}; failed: {}", failures.join("; "))
         };
         failures.is_empty()
     }
@@ -2666,7 +2682,7 @@ impl App {
             let mut interrupted = false;
             let mut select_all = false;
             ctx.input(|i| {
-                for event in &i.events {
+                for (event_index, event) in i.events.iter().enumerate() {
                     match event {
                         egui::Event::Text(t) => {
                             if !(i.modifiers.ctrl || i.modifiers.command) {
@@ -2677,10 +2693,23 @@ impl App {
                             out.extend_from_slice(command_input::normalize(t).as_bytes())
                         }
                         egui::Event::Copy => {
+                            // winit emits Copy instead of a C press. A following
+                            // key event (including Ctrl release) retains the event
+                            // modifiers even when the frame's final state is empty.
+                            let modifiers = i.events[event_index + 1..]
+                                .iter()
+                                .find_map(|event| {
+                                    if let egui::Event::Key { modifiers, .. } = event {
+                                        Some(*modifiers)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(i.modifiers);
                             if sel.is_some() {
                                 copy = true;
-                            } else if (i.modifiers.ctrl || i.modifiers.command)
-                                && !i.modifiers.shift
+                            } else if (modifiers.ctrl || modifiers.command)
+                                && !modifiers.shift
                                 && !interrupted
                             {
                                 out.push(0x03);
@@ -2744,7 +2773,9 @@ impl App {
                     .term
                     .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
                 self.sessions[active].scroll_pixels = 0.0;
-                self.sessions[active].write(&out);
+                if let Err(error) = self.sessions[active].write(&out) {
+                    self.flash = error.to_string();
+                }
                 self.sessions[active].clear_selection();
             }
         }
@@ -3575,76 +3606,6 @@ impl App {
         self.refresh_devices();
         self.import_msg = format!("Imported {n} device(s) from CSV");
     }
-
-    fn import_securecrt(&mut self) {
-        let mut n = 0;
-        if let Ok(entries) = std::fs::read_dir(&self.crt_path) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.extension().map(|x| x == "ini").unwrap_or(false) {
-                    if let Ok(text) = std::fs::read_to_string(&p) {
-                        let mut map = std::collections::HashMap::new();
-                        for line in text.lines() {
-                            if let Some(rest) = line
-                                .strip_prefix("S:\"")
-                                .or_else(|| line.strip_prefix("D:\""))
-                            {
-                                if let Some((k, v)) = rest.split_once("\"=") {
-                                    map.insert(k.to_string(), v.to_string());
-                                }
-                            }
-                        }
-                        let Some(host) = map.get("Hostname").cloned() else {
-                            continue;
-                        };
-                        let proto = map
-                            .get("Protocol Name")
-                            .map(|s| {
-                                if s.to_lowercase().contains("telnet") {
-                                    "telnet"
-                                } else {
-                                    "ssh"
-                                }
-                            })
-                            .unwrap_or("ssh");
-                        let port = map
-                            .get("[SSH2] Port")
-                            .or_else(|| map.get("[Telnet] Port"))
-                            .and_then(|h| u16::from_str_radix(h, 16).ok())
-                            .unwrap_or(if proto == "telnet" { 23 } else { 22 });
-                        let name = p
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "device".into());
-                        let input = SavedSessionInput {
-                            id: None,
-                            folder_id: None,
-                            name,
-                            host,
-                            port,
-                            protocol: proto.to_string(),
-                            username: map.get("Username").cloned(),
-                            ssh_alias: None,
-                            identity_file: None,
-                            proxy_jump: None,
-                            tags: vec![],
-                            description: None,
-                            notes: None,
-                            settings_override: None,
-                            credential_ref: None,
-                            is_favorite: false,
-                            sort_order: None,
-                        };
-                        if self.db.upsert_session(&input).is_ok() {
-                            n += 1;
-                        }
-                    }
-                }
-            }
-        }
-        self.refresh_devices();
-        self.import_msg = format!("Imported {n} SecureCRT session(s)");
-    }
 }
 
 fn install_fonts(ctx: &egui::Context, terminal_path: Option<&std::path::Path>) {
@@ -3911,6 +3872,9 @@ impl App {
         }
         for s in &self.sessions {
             s.wake.bind(&ctx);
+            if let Some(status) = &s.io_status {
+                status.bind(&ctx);
+            }
         }
         for p in &self.pending_connections {
             p.task.bind(&ctx);
@@ -4699,7 +4663,9 @@ impl App {
                         if let Some(sess) = self.sessions.get(self.active) {
                             let mut bytes = text.into_bytes();
                             bytes.push(b'\r');
-                            sess.write(&bytes);
+                            if let Err(error) = sess.write(&bytes) {
+                                self.flash = error.to_string();
+                            }
                         }
                     }
                     if let Some(i) = delete {
@@ -5059,20 +5025,6 @@ impl App {
                     );
                     if ui.button("Import CSV").clicked() {
                         self.import_csv();
-                    }
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new("SecureCRT: path to a Sessions folder")
-                            .small()
-                            .color(muted()),
-                    );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.crt_path)
-                            .hint_text("/path/to/Sessions")
-                            .desired_width(480.0),
-                    );
-                    if ui.button("Import SecureCRT").clicked() {
-                        self.import_securecrt();
                     }
                     if !self.import_msg.is_empty() {
                         ui.label(egui::RichText::new(&self.import_msg).color(ok()));
@@ -6238,6 +6190,51 @@ mod tests {
         );
         assert_eq!(&*writes.lock().unwrap(), &[0x03]);
         writes.lock().unwrap().clear();
+        // Native backends can batch release of C and Ctrl into one frame.
+        let _ = ctx.run_ui(
+            input(
+                vec![
+                    egui::Event::Copy,
+                    egui::Event::Key {
+                        key: egui::Key::C,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            ),
+            |ui| app.show(ui),
+        );
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            &[0x03],
+            "quick Ctrl+C lost its event modifiers"
+        );
+        writes.lock().unwrap().clear();
+        let _ = ctx.run_ui(
+            input(
+                vec![
+                    egui::Event::Copy,
+                    egui::Event::Key {
+                        key: egui::Key::ControlLeft,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            ),
+            |ui| app.show(ui),
+        );
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            &[0x03],
+            "native Copy plus Ctrl release lost its modifiers"
+        );
+        writes.lock().unwrap().clear();
         app.sessions[0].sel_anchor = Some(Point::new(Line(0), Column(0)));
         app.sessions[0].sel_head = Some(Point::new(Line(0), Column(1)));
         let _ = ctx.run_ui(
@@ -6259,6 +6256,26 @@ mod tests {
         assert!(
             writes.lock().unwrap().is_empty(),
             "Ctrl+Shift+C must only copy"
+        );
+        let _ = ctx.run_ui(
+            input(
+                vec![
+                    egui::Event::Copy,
+                    egui::Event::Key {
+                        key: egui::Key::C,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            ),
+            |ui| app.show(ui),
+        );
+        assert!(
+            writes.lock().unwrap().is_empty(),
+            "quick Ctrl+Shift+C must not interrupt"
         );
     }
 
@@ -6495,11 +6512,14 @@ mod tests {
         app.pending_connections.push(connections::Pending {
             request,
             task: background::Task::spawn(|| {
-                Ok(connections::OpenedProvider(Some(Box::new(TestProvider {
-                    reader: Mutex::new(Some(Box::new(std::io::empty()))),
-                    writes: Arc::new(Mutex::new(Vec::new())),
-                    alive: Arc::new(AtomicBool::new(true)),
-                }))))
+                Ok(connections::OpenedProvider(
+                    Some(Box::new(TestProvider {
+                        reader: Mutex::new(Some(Box::new(std::io::empty()))),
+                        writes: Arc::new(Mutex::new(Vec::new())),
+                        alive: Arc::new(AtomicBool::new(true)),
+                    })),
+                    None,
+                ))
             })
             .unwrap(),
         });
@@ -7279,7 +7299,7 @@ mod tests {
                 dims: TerminalDimensions { cols: 80, rows: 24 },
             },
             task: background::Task::spawn(move || {
-                Ok(connections::OpenedProvider(Some(Box::new(provider))))
+                Ok(connections::OpenedProvider(Some(Box::new(provider)), None))
             })
             .unwrap(),
         });
@@ -7338,6 +7358,52 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(app.sftp_msg.contains("permission denied"));
+    }
+
+    struct RejectResizeOnce(Arc<AtomicUsize>);
+    impl ConnectionProvider for RejectResizeOnce {
+        fn write(&self, _: &[u8]) -> opsterm_core::error::AppResult<()> {
+            Ok(())
+        }
+        fn resize(&self, _: TerminalDimensions) -> opsterm_core::error::AppResult<()> {
+            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(opsterm_core::error::AppError::Validation(
+                    "queue full".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        fn kill(&self) -> opsterm_core::error::AppResult<()> {
+            Ok(())
+        }
+        fn take_reader(&self) -> opsterm_core::error::AppResult<Box<dyn Read + Send>> {
+            Ok(Box::new(std::io::empty()))
+        }
+        fn is_alive(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn rejected_resize_is_retried_on_the_next_frame() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut session = Session::new(
+            "resize".into(),
+            Box::new(RejectResizeOnce(calls.clone())),
+            80,
+            24,
+            None,
+            Origin::Local,
+        );
+        session.resize(120, 40);
+        session.resize(120, 40);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "final size was not retried after backpressure"
+        );
+        assert_eq!((session.cols, session.rows), (120, 40));
     }
 
     struct BurstReader(Arc<AtomicUsize>);

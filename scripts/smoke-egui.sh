@@ -100,8 +100,37 @@ for _ in {1..30}; do
   sleep 0.1
 done
 [[ -f "$smoke_data/tab-switch-works" ]] || { echo 'Tab selection did not change the command target' >&2; exit 1; }
+# A busy output stream must not monopolize event handling or prevent a new tab.
+xdotool key ctrl+shift+p
+xdotool mousemove --window "$smoke_window" 450 300 click 1
+xdotool type --clearmodifiers 'yes OPSTERM-STRESS'
+xdotool key Return
+sleep 0.2
+xdotool key ctrl+shift+t
+sleep 0.5
+xdotool mousemove --window "$smoke_window" 450 300 click 1
+xdotool type --clearmodifiers 'touch "$OPSTERM_SMOKE_DIR/responsive-under-output"'
+xdotool key Return
+for _ in {1..50}; do
+  [[ -f "$smoke_data/responsive-under-output" ]] && break
+  sleep 0.1
+done
+[[ -f "$smoke_data/responsive-under-output" ]] || { echo 'UI stalled during continuous output' >&2; exit 1; }
+xdotool key ctrl+shift+w
+sleep 0.2
+# Closing the last tab selects SECOND, so explicitly return to busy FIRST.
+xdotool mousemove --window "$smoke_window" 45 63 click 1
+xdotool mousemove --window "$smoke_window" 450 300 click 1
+xdotool key ctrl+c
+xdotool type --clearmodifiers 'test "${OPSTERM_SMOKE_TAB:-FIRST}" = FIRST && touch "$OPSTERM_SMOKE_DIR/output-interrupted"'
+xdotool key Return
+for _ in {1..50}; do
+  [[ -f "$smoke_data/output-interrupted" ]] && break
+  sleep 0.1
+done
+[[ -f "$smoke_data/output-interrupted" ]] || { echo 'Could not interrupt continuous output' >&2; exit 1; }
 import -window "$smoke_window" "$smoke_output/desktop.png"
 xdotool windowsize "$smoke_window" 760 500
 sleep 0.5
 import -window "$smoke_window" "$smoke_output/minimum.png"
-echo 'GUI smoke passed: local PTY, Ctrl+C, composer Enter, saved-device row click, isolated tab targets, normal/minimum window.'
+echo 'GUI smoke passed: local PTY, Ctrl+C, composer Enter, saved-device row click, isolated tab targets, continuous-output responsiveness, normal/minimum window.'

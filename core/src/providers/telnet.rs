@@ -302,6 +302,7 @@ fn naws(dims: TerminalDimensions) -> Vec<u8> {
 
 pub struct TelnetSession {
     writer: Arc<Mutex<TcpStream>>,
+    shutdown: TcpStream,
     reader: Mutex<Option<Box<dyn Read + Send>>>,
     stop: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
@@ -323,6 +324,7 @@ pub fn spawn_telnet(
     stream.set_read_timeout(Some(Duration::from_millis(300)))?;
     let _ = stream.set_nodelay(true);
 
+    let shutdown = stream.try_clone()?;
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let stop = Arc::new(AtomicBool::new(false));
     let alive = Arc::new(AtomicBool::new(true));
@@ -367,6 +369,7 @@ pub fn spawn_telnet(
 
     Ok(Box::new(TelnetSession {
         writer,
+        shutdown,
         reader: Mutex::new(Some(Box::new(ChannelReader::new(rx)))),
         stop,
         alive,
@@ -455,7 +458,8 @@ impl ConnectionProvider for TelnetSession {
     fn kill(&self) -> AppResult<()> {
         self.stop.store(true, Ordering::SeqCst);
         self.alive.store(false, Ordering::SeqCst);
-        let _ = self.writer.lock().shutdown(std::net::Shutdown::Both);
+        // A blocked write holds the writer mutex; shutdown must bypass it.
+        let _ = self.shutdown.shutdown(std::net::Shutdown::Both);
         Ok(())
     }
 
@@ -580,5 +584,47 @@ mod tests {
             n.feed(&[DO, SGA], &mut out, &mut reply, "xterm", dims());
         }
         assert_eq!(replies, vec![vec![IAC, WILL, SGA]]);
+    }
+
+    #[test]
+    fn shutdown_cancels_a_write_to_a_nonreading_peer() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let provider: Arc<dyn ConnectionProvider> = Arc::from(
+            spawn_telnet(
+                &TelnetSpec {
+                    host: "127.0.0.1".into(),
+                    port: listener.local_addr().unwrap().port(),
+                    username: None,
+                    password: None,
+                    term: None,
+                },
+                dims(),
+            )
+            .unwrap(),
+        );
+        let (peer, _) = listener.accept().unwrap();
+        let writer = provider.clone();
+        let (write_tx, write_rx) = mpsc::channel();
+        let writing = std::thread::spawn(move || {
+            let result = writer.write(&vec![b'x'; 16 * 1024 * 1024]);
+            let _ = write_tx.send(result.is_err());
+        });
+        assert!(write_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        let closing = provider.clone();
+        let (close_tx, close_rx) = mpsc::channel();
+        let close = std::thread::spawn(move || {
+            let _ = close_tx.send(closing.kill().is_ok());
+        });
+        let promptly = close_rx.recv_timeout(Duration::from_millis(200));
+        // Release the old implementation even when the regression fails.
+        let _ = peer.shutdown(std::net::Shutdown::Both);
+        drop(peer);
+        writing.join().unwrap();
+        close.join().unwrap();
+        assert!(
+            promptly.unwrap_or(false),
+            "close waited for the blocked writer mutex"
+        );
+        assert!(!provider.is_alive());
     }
 }

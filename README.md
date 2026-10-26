@@ -9,9 +9,8 @@ multi-session workflows.
 > [`FEATURE_STATUS.md`](FEATURE_STATUS.md) for exactly what is real vs planned.
 > Nothing in this repository simulates remote output.
 
-OpsTerm is an **independent** project inspired by the workflows of commercial
-terminal clients. It shares no code, assets, or branding with SecureCRT or any
-other product.
+OpsTerm is an **independent** terminal workspace for network operations,
+built with original code, assets and branding.
 
 ## Download and updates
 
@@ -56,8 +55,7 @@ npm run build:egui
 
 Features: SSH (OpenSSH **and** native engine) · local shell · Telnet · serial ·
 tabs with drag-reorder · split (drag-resize) · 2×2 grid monitor · device editor
-with **vendor profiles** (Huawei/Cisco/Juniper/MikroTik/ZTE/Linux) · import CSV
-& SecureCRT · command library + button bar · **broadcast** to selected targets ·
+with **vendor profiles** (Huawei/Cisco/Juniper/MikroTik/ZTE/Linux) · import CSV · command library + button bar · **broadcast** to selected targets ·
 runbooks (expect) · auto pager-disable & auto login/enable · logging per session
 (`0600`) · keyword highlight (editable) + find · scratchpad · double-click
 copy · SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping ·

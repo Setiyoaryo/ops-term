@@ -1,5 +1,8 @@
 # Feature Status
 
+26 Oktober 2026 — v0.1.2: operasi transport egui dipindahkan ke worker dengan antrean terbatas; shutdown Telnet, retry resize, dan Ctrl+C native diuji. Importer pihak ketiga lama dihapus; CSV tetap tersedia. [Bukti pengujian](docs/responsiveness-2026-10-26.md).
+
+
 ## Repository layout (workspace)
 
 - `core/` — `opsterm-core`: all UI-agnostic logic (domain, security/argv,
@@ -26,7 +29,7 @@ Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia d
 |---|---|---|
 | Transport | Local shell · SSH (OpenSSH + native russh) · Telnet (auto-login) · Serial | Implemented |
 | Layout | Tabs (drag-reorder) · Split (drag-resize) · 2×2 grid monitor | Implemented |
-| Devices | Editor (host/port/proto/user/credential/pager/backspace/login) · vendor profiles · import CSV & SecureCRT · filter | Implemented |
+| Devices | Editor (host/port/proto/user/credential/pager/backspace/login) · vendor profiles · import CSV · filter | Implemented |
 | Commands | Library + button bar · broadcast to selected targets · runbooks (expect) · auto pager-disable & auto login/enable | Implemented |
 | Output | Keyword highlight (editable rules) · find · logging per session (`0600`) · scratchpad · double-click copy · select-all · export output | Implemented |
 | Tools | SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping · traceroute · DNS | Implemented |
@@ -91,7 +94,6 @@ Last updated: 2026-10-16 (Phases 0–5 implemented through M3 feature set).
 | — | Auto pager-disable on connect (Huawei/Cisco/Juniper/MikroTik presets) | Implemented | SessionEditor → On connect |
 | — | Auto-logging per device + Logs browser (export) | Implemented | `LogsPanel`, `log_read` (dir-confined) |
 | — | SFTP browser (list/mkdir/rename/delete + upload/download) | Implemented | `sftp/`, `FileBrowserPanel`; parser tests |
-| FR-16 | Import SecureCRT session `.ini` (metadata-only, folder tree) | Implemented | `parseSecureCrt` tests |
 | FR-06 | Duplicate/clone tab + drag-reorder tabs | Implemented | store + TabBar; e2e |
 | FR-06 | Auto-reconnect dropped sessions (bounded) | Implemented | Settings → General |
 | FR-08 | Multi-colour highlight rules + copy-on-select | Implemented | `TerminalPane` decorations |

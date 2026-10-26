@@ -80,7 +80,10 @@ pub struct Queued {
 
 /// A result can be abandoned when the window or reconnect target is closed.
 /// Providers do not all kill their subprocess/socket on ordinary Drop.
-pub struct OpenedProvider(pub Option<Box<dyn ConnectionProvider>>);
+pub struct OpenedProvider(
+    pub Option<Box<dyn ConnectionProvider>>,
+    pub Option<crate::session_io::Status>,
+);
 
 impl Drop for OpenedProvider {
     fn drop(&mut self) {
@@ -143,7 +146,8 @@ impl Pending {
                 Origin::Serial(spec) => providers::serial::spawn_serial(spec, dims),
             };
             provider
-                .map(|p| OpenedProvider(Some(p)))
+                .and_then(crate::session_io::responsive)
+                .map(|(provider, status)| OpenedProvider(Some(provider), Some(status)))
                 .map_err(|e| SetupError::Connection(e.to_string()))
         })?;
         Ok(Self { request, task })

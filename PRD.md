@@ -6,18 +6,17 @@
 > **Platform V1:** Ubuntu 22.04/24.04 LTS x86_64; GNOME/KDE on Wayland and X11 (verify separately)\
 > **Document version:** 1.0\
 > **Research cutoff:** 14 October 2026\
-> **Primary reference:** SecureCRT 9.7.x by VanDyke Software\
 > **Implementation target:** Codex-assisted development, repository baru dan kode orisinal
 
 ---
 
 ## 0. Executive summary
 
-Build an **independent desktop application inspired by the workflows and capabilities of SecureCRT**, specifically for network engineers, NOC analysts, system administrators, and infrastructure teams using Linux. The app must feel as reliable as a purpose-built terminal, not like a demo web page with a terminal-shaped box.
+Build an **independent native desktop terminal workspace**, specifically for network engineers, NOC analysts, system administrators, and infrastructure teams using Linux. The app must feel as reliable as a purpose-built terminal, not like a demo web page with a terminal-shaped box.
 
 It must connect to actual SSH devices, support local PTY shells, manage hundreds/thousands of saved device profiles, organize simultaneous sessions in tabs/splits, search and highlight CLI output, save terminal logs, execute reusable commands, and progressively support Telnet, serial-console, file transfer, and network automation.
 
-**Non-negotiable:** SecureCRT is proprietary commercial software. Reimplement independently using public protocols, observed functionality, public documentation, and original design/code/assets. Do not decompile, copy code, redistribute copyrighted branding, clone the exact UI pixel-for-pixel, or label the product “SecureCRT.” Feature parity is an aspiration, **not** a claim of binary compatibility or endorsement.
+**Non-negotiable:** Use original code, design and assets with public protocols. Do not copy proprietary implementations, branding or protected credentials.
 
 ### Product promise
 
@@ -29,48 +28,11 @@ A release only qualifies as usable when SSH and local-shell input/output actuall
 
 ---
 
-## 1. Research findings and factual baseline
+## 1. Product baseline
 
-SecureCRT **9.7.3**, released **1 July 2026**, is the latest official release listed at the time of research. SecureCRT itself supports Linux. VanDyke's stated Linux support includes Ubuntu/Kubuntu 22.04 and 24.04 LTS (64-bit). Our product is an independent alternative, **not** a Linux port of VanDyke code.
+OpsTerm is an independent Linux terminal workspace. Its requirements follow the daily work of network operations teams: reliable protocol connections, searchable saved inventory, readable terminal output, deliberate command automation and secure local storage.
 
-### 1.1 Capabilities observed in official material
-
-| Capability | SecureCRT reference | Reimplementation strategy |
-|---|---|---|
-| SSH2 terminal | Core capability | V1 via local OpenSSH client in PTY |
-| Telnet, serial connections | Listed protocols | Telnet with warning; native serial backend |
-| Local shell | Supported Linux session type | PTY-spawn default shell |
-| Saved sessions and nested folders | Dockable Session Manager | SQLite tree + filtering + drag/drop |
-| Active Sessions Manager | Status/operations on live sessions | Distinct live-session view |
-| Tabs, tab groups, tiling | Multiple concurrent sessions | Tab model + recursive split layout |
-| Workspace snapshots | Introduced in 9.7 | Persist tab/split layouts independently from connections |
-| Keyword highlighting | Plain words, phrases, regex | Terminal decoration/search with bounded work |
-| Ad hoc highlight input | 9.7 | Temporary highlight search in toolbar |
-| Command Manager | Searchable reusable commands/folders | Command library and command composer |
-| Button Bar | User-customizable commands/scripts/actions | Compact configurable toolbar |
-| Command Window | Target active/all/selected sessions | Composer + safe scoped broadcast |
-| Script recorder/Python | Official automation options on Linux | Independent automation API in later phase |
-| Credential manager | Named shared credentials | Linux Secret Service in later phase |
-| SFTP tabs/transfer | Present in SecureCRT 9.7 | Separate transfer view, not full SecureFX clone |
-| CSV/TSV import/export | Official feature | Safe preview + field mapping + duplicate handling |
-| Logging / log rotation | Official feature | Structured raw-output logging, optional rotation |
-
-**Scope caveat:** Some VanDyke features differ by OS. E.g. RDP and some script editor capabilities are Windows-specific, and SecureFX is a separate companion product. Do not incorrectly advertise Windows-only functions as universally available in SecureCRT for Linux.
-
-### 1.2 Relevant official sources
-
-1. [SecureCRT Linux overview](https://www.vandyke.com/products/securecrt/unix.html)
-2. [SecureCRT features](https://www.vandyke.com/products/beta/securecrt/features.html) (9.7 feature reference; some content on a historical beta page)
-3. [What's new in SecureCRT 9.7](https://www.vandyke.com/products/securecrt/new-in.html)
-4. [SecureCRT version history](https://www.vandyke.com/products/history.php?prod=securecrt)
-5. [Current official versions](https://www.vandyke.com/download/latestreleases.html)
-6. [Official system requirements](https://www.vandyke.com/products/system_req.html)
-7. [Broadcast with Command Window](https://www.vandyke.com/support/tips/chatsendcom.html)
-8. [Command Window automation and modes](https://www.vandyke.com/support/scripting/scripting-examples/command-window-automation.html)
-9. [Button Bar usage](https://www.vandyke.com/support/tips/buttonbar.html)
-10. [SecureCRT tiling behavior](https://www.vandyke.com/support/tips/tiling_overview.html)
-
-These sources are references for behavior, **not** source code or product assets to be copied.
+Use public protocol specifications, maintained dependency documentation and verified tests as implementation references. Product claims must reflect features demonstrated by real connections and desktop behavior.
 
 ---
 
@@ -139,12 +101,12 @@ These sources are references for behavior, **not** source code or product assets
 
 ### 3.2 Explicitly out of scope for M1
 
-- RDP/VNC desktop remoting; SecureFX-level bidirectional sync/FTPS/WebDAV/S3.
+- RDP/VNC desktop remoting; Bidirectional file synchronization, FTPS, WebDAV or S3.
 - Full emulation of vintage terminals (TN3270, Wyse, SCO ANSI).
 - SSH1 (obsolete/insecure); do not implement by default.
 - Web-based SSH relay, cloud account, telemetry pipeline, public multi-user server.
 - Automatic discovery/scanning of public internet, mass execution by default.
-- Copying SecureCRT proprietary config decryption, protected credential extraction, branding, copyrighted assets.
+- Proprietary configuration decryption, protected credential extraction, copied branding or copyrighted assets.
 - Fully automated production configuration modification before safety controls are proven.
 
 ---
@@ -153,7 +115,7 @@ These sources are references for behavior, **not** source code or product assets
 
 ### 4.1 Layout specification
 
-A high-density professional desktop UI with compact visual hierarchy; original styling influenced by contemporary IDEs and tools such as VS Code, not a 1:1 SecureCRT screenshot. **No neon, no excessive gradients, no giant decorative cards.**
+A high-density professional desktop UI with compact visual hierarchy; original styling influenced by contemporary IDEs and tools such as VS Code, with an original visual identity. **No neon, no excessive gradients, no giant decorative cards.**
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
@@ -398,7 +360,6 @@ Priority legend: **P0 required before M1 shipped**; **P1 M2**; **P2 M3+**.
 - Import `~/.ssh/config` aliases as **references**; preserve original file, do not copy SSH secrets or private key contents.
 - Export session metadata and settings to versioned JSON and CSV without passwords; secret references may be omitted or names only, never secret values.
 - Backup should be atomic, with schema version and checksum, import preview; conflicting session IDs remapped safely.
-- SecureCRT-specific session import: optional future **metadata-only** migration if lawful format documented/tested; no decryption/circumvention.
 
 **Acceptance**: import 100 CSV sessions, preview 2 invalid rows, avoid duplicate creation; export/reimport preserves nested folders and profiles, no password in output.
 
@@ -695,7 +656,7 @@ Enforce narrow Tauri capabilities. The untrusted renderer cannot access arbitrar
 
 - M1: signed or checksum-verified `.deb`; include `.desktop`, application icon (original), desktop categories, packaged license notices.
 - M2: AppImage (test runtime dependencies and distribution compatibility), optional RPM.
-- Artifact names/versioning conventional and distinct from SecureCRT; don't overwrite other terminal clients.
+- Artifact names/versioning conventional and specific to OpsTerm; don't overwrite other terminal clients.
 - On startup, check for `ssh` existence and show actionable install instruction if missing; no silent network package installation.
 - Support user storage via XDG paths: `~/.config/<app>`, `~/.local/share/<app>`, `~/.cache/<app>`; honor XDG environment overrides.
 - Clean uninstall removes application package but preserves user data by default; provide a separate, explicit user-data-delete flow.
@@ -931,7 +892,7 @@ Before adding dependency: check current maintenance, features, Linux compatibili
 | Secrets leaked into logs/imports | Critical | Keyring-only secret storage, opt-in recording, secret scanning |
 | Complex script engine executes untrusted code | Critical | Defer until explicit run permissions, isolate subprocess, threat model |
 | Vendor device syntax differs by firmware | Medium | Verified examples, per-vendor/version profile metadata |
-| Scope creep from full SecureCRT parity | High | Milestone gates and honest feature status |
+| Scope creep from unrelated terminal features | High | Milestone gates and honest feature status |
 | Dependency/licensing conflict | High | SBOM/licenses review in CI before distribution |
 | Building on new glibc breaks Ubuntu 22.04 | Medium | Oldest supported build baseline |
 
@@ -962,7 +923,7 @@ Global GA gate: real SSH, PTY, 20-session isolation test, host-key test, crash r
 
 ```text
 You are the lead engineer implementing OpsTerm: an original Linux-first desktop
-terminal client inspired by SecureCRT workflows. Read PRD.md in full.
+terminal workspace for network operations. Read PRD.md in full.
 
 Constraints:
 - Target Ubuntu 24.04 LTS first, then Ubuntu 22.04.
@@ -1068,7 +1029,7 @@ Before considering M2 complete, additionally verify:
 
 These should be written as ADRs, not silently assumed:
 
-1. Confirm final product name, logo and distribution license; no VanDyke branding.
+1. Confirm final product name, logo and distribution license; original OpsTerm branding.
 2. Decide whether Ubuntu 22.04 compatibility is mandatory from first release or one milestone later.
 3. Decide whether workspaces open saved sessions automatically or only after explicit confirmation (recommended default: confirmation).
 4. Determine serial adapter hardware and network lab platforms available for automated E2E tests.
@@ -1082,7 +1043,7 @@ These should be written as ADRs, not silently assumed:
 
 ## 22. Future enhancements differentiated for ISP/network operations
 
-These are **new product ideas**, not features attributed to SecureCRT:
+These are **future OpsTerm product ideas**:
 
 - NOC-centric device inventory labels: POP, region, vendor, ASN, device role, environment.
 - Session group presets: `Core`, `Aggregation`, `Metro-E`, `BNG`, `OLT`, `Datacenter`.
@@ -1101,4 +1062,4 @@ These should never block the baseline terminal and connection stability.
 ## Final principle
 
 **Build a dependable terminal product before expanding the feature list.**
-The first success is not “looks like SecureCRT”; it is “an engineer can safely and reliably use it for daily work on real routers, switches, OLTs, and servers under Ubuntu.”
+Success means “an engineer can safely and reliably use it for daily work on real routers, switches, OLTs, and servers under Ubuntu.”

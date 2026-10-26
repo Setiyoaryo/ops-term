@@ -16,32 +16,6 @@ const COLUMNS = [
   "description",
 ] as const;
 
-/** Parse a SecureCRT session `.ini` (metadata only, no secrets). */
-export function parseSecureCrt(text: string, fallbackName: string): SavedSessionInput | null {
-  const map: Record<string, string> = {};
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^[SDC]:"(.*?)"=(.*)$/);
-    if (m) map[m[1]] = m[2];
-  }
-  const host = map["Hostname"];
-  if (!host) return null;
-  const protoName = (map["Protocol Name"] ?? "SSH2").toLowerCase();
-  const protocol: Protocol = protoName.includes("telnet") ? "telnet" : "ssh";
-  let port = protocol === "telnet" ? 23 : 22;
-  const portRaw =
-    map["[SSH2] Port"] ?? map["[Telnet] Port"] ?? map["[SSH1] Port"] ?? "";
-  if (/^[0-9A-Fa-f]{8}$/.test(portRaw)) port = parseInt(portRaw, 16);
-  else if (/^\d+$/.test(portRaw)) port = Number(portRaw);
-  return {
-    name: fallbackName,
-    host,
-    port: Number.isFinite(port) && port > 0 ? port : protocol === "telnet" ? 23 : 22,
-    protocol,
-    username: map["Username"]?.trim() || null,
-    description: map["Description"]?.trim() || null,
-  };
-}
-
 function folderPath(session: SavedSession, folders: { id: string; parentId: string | null; name: string }[]): string {
   const parts: string[] = [];
   let current = folders.find((f) => f.id === session.folderId);
@@ -60,9 +34,7 @@ export function ImportExportPanel() {
   const saveSession = useLibrary((s) => s.saveSession);
 
   const fileRef = useRef<HTMLInputElement>(null);
-  const crtRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<SavedSessionInput[] | null>(null);
-  const [crtPreview, setCrtPreview] = useState<{ input: SavedSessionInput; folders: string[] }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -156,62 +128,6 @@ export function ImportExportPanel() {
     setPreview(items);
   };
 
-  const onCrtFiles = async (files: FileList) => {
-    setError(null);
-    setNote(null);
-    setCrtPreview(null);
-    const items: { input: SavedSessionInput; folders: string[] }[] = [];
-    for (const file of Array.from(files)) {
-      if (!file.name.toLowerCase().endsWith(".ini")) continue;
-      const text = await file.text();
-      const input = parseSecureCrt(text, file.name.replace(/\.ini$/i, ""));
-      if (!input) continue;
-      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? "";
-      let folders: string[] = [];
-      if (rel) {
-        const parts = rel.split("/");
-        parts.pop();
-        folders = parts.filter((p) => p && p.toLowerCase() !== "sessions");
-      }
-      items.push({ input, folders });
-    }
-    if (items.length === 0) {
-      setError("No SecureCRT sessions found in the selection.");
-      return;
-    }
-    setCrtPreview(items);
-  };
-
-  const ensureFolder = async (parts: string[]): Promise<string | null> => {
-    let parent: string | null = null;
-    for (const part of parts) {
-      const existing = useLibrary
-        .getState()
-        .folders.find((f) => f.parentId === parent && f.name === part);
-      parent = existing
-        ? existing.id
-        : (await useLibrary.getState().saveFolder({ parentId: parent, name: part })).id;
-    }
-    return parent;
-  };
-
-  const confirmCrtImport = async () => {
-    if (!crtPreview) return;
-    let ok = 0;
-    let failed = 0;
-    for (const item of crtPreview) {
-      try {
-        const folderId = item.folders.length ? await ensureFolder(item.folders) : null;
-        await useLibrary.getState().saveSession({ ...item.input, folderId });
-        ok += 1;
-      } catch {
-        failed += 1;
-      }
-    }
-    setNote(`Imported ${ok} SecureCRT session(s), ${failed} skipped.`);
-    setCrtPreview(null);
-  };
-
   const confirmImport = async () => {
     if (!preview) return;
     let ok = 0;
@@ -251,14 +167,6 @@ export function ImportExportPanel() {
         >
           Import CSV/TSV…
         </button>
-        <button
-          type="button"
-          onClick={() => crtRef.current?.click()}
-          data-testid="import-securecrt"
-          className="rounded border border-[#2B323A] px-2 py-1 hover:bg-[#1D2228]"
-        >
-          Import SecureCRT folder…
-        </button>
         <input
           ref={fileRef}
           type="file"
@@ -270,54 +178,7 @@ export function ImportExportPanel() {
             e.target.value = "";
           }}
         />
-        <input
-          ref={crtRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files) void onCrtFiles(e.target.files);
-            e.target.value = "";
-          }}
-          {...({ webkitdirectory: "true", directory: "true" } as Record<string, string>)}
-        />
       </div>
-      {crtPreview && (
-        <div className="flex flex-col gap-1">
-          <p className="text-[#99A3AE]">
-            {crtPreview.length} SecureCRT session(s) — password/credentials are
-            never imported:
-          </p>
-          <div className="max-h-40 overflow-y-auto rounded border border-[#2B323A]">
-            {crtPreview.map((item, i) => (
-              <div key={i} className="flex gap-2 px-2 py-0.5">
-                <span className="w-40 truncate">{item.input.name}</span>
-                <span className="flex-1 truncate text-[#99A3AE]">{item.input.host}</span>
-                <span className="text-[#5C6370]">
-                  {item.folders.join("/") || "—"}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              data-testid="import-crt-confirm"
-              onClick={() => void confirmCrtImport()}
-              className="rounded bg-[#4F8EE8] px-2 py-1 font-medium text-white hover:bg-[#3F7ED8]"
-            >
-              Import {crtPreview.length}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCrtPreview(null)}
-              className="rounded border border-[#2B323A] px-2 py-1 hover:bg-[#1D2228]"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
       {note && <p className="text-emerald-400">{note}</p>}
       {error && <p className="text-red-400">{error}</p>}
       {preview && (
