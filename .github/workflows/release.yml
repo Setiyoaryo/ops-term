@@ -1,0 +1,88 @@
+name: Release egui
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-egui
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'Setiyoaryo/ops-term'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize temporary publishing configuration
+        run: printf 'GH_CONFIG_DIR=%s/opsterm-gh\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Validate trusted release tag
+        run: |
+          python3 -c 'import sys; from scripts.package_egui import version, validate_release_tag; validate_release_tag(sys.argv[1], version())' "$GITHUB_REF_NAME"
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libdbus-1-dev libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: 1.94.1
+          components: rustfmt, clippy
+      - name: Format check
+        run: python3 scripts/build_guard.py -- cargo fmt -p opsterm-core -p opsterm-egui --check
+      - name: Package metadata tests
+        run: python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py
+      - name: Rust tests
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/opsterm-test-data
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/nonexistent-opsterm-test-bus
+        run: python3 scripts/build_guard.py -- cargo test -p opsterm-core -p opsterm-egui --release --locked -- --test-threads=1
+      - name: Clippy
+        run: python3 scripts/build_guard.py -- cargo clippy -p opsterm-core -p opsterm-egui --release --locked --all-targets -- -D warnings
+      - name: Materialize signing key and scoped publishing credential
+        shell: bash
+        run: |
+          umask 077
+          mkdir -p "$GH_CONFIG_DIR"
+          cat > "$RUNNER_TEMP/opsterm-signing.key" <<'OPSTERM_SIGNING_KEY_EOF'
+          ${{ secrets.OPSTERM_UPDATE_SIGNING_KEY }}
+          OPSTERM_SIGNING_KEY_EOF
+          cat > "$GH_CONFIG_DIR/hosts.yml" <<'OPSTERM_GH_AUTH_EOF'
+          github.com:
+              oauth_token: ${{ github.token }}
+              git_protocol: https
+          OPSTERM_GH_AUTH_EOF
+          test -s "$RUNNER_TEMP/opsterm-signing.key"
+      - name: Build and sign versioned assets
+        run: |
+          python3 scripts/package_egui.py --tag "$GITHUB_REF_NAME" --key "$RUNNER_TEMP/opsterm-signing.key" --asset-base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" --keep-target
+      - name: Verify signed manifest using the release binary
+        env:
+          OPSTERM_UPDATE_URL: ${{ github.workspace }}/release/manifest.json
+        run: ./target/release/opsterm-egui --check-update
+      - name: Publish complete release
+        run: python3 -m scripts.publish_github_release --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+      - name: Remove private temporary material and build caches
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/opsterm-signing.key"
+          rm -rf "$RUNNER_TEMP/opsterm-gh" "$RUNNER_TEMP/opsterm-release-download"
+          if pgrep -af 'cargo|vite|build_guard'; then
+            echo 'Cleanup refused while a build/test process is still active.'
+            exit 1
+          fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
+          test ! -d target
+          test ! -d src-tauri/target

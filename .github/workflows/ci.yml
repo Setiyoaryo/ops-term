@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: '1'
+  NODE_OPTIONS: '--max-old-space-size=384 --max-semi-space-size=8'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: python3 scripts/build_guard.py -- npm test
+      - run: npm run test:build-guard
+      - name: Release packaging metadata tests
+        run: python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Frontend build and E2E
+        run: npm run e2e
+      - name: Clean build and test caches
+        if: always()
+        run: |
+          if pgrep -af 'cargo|vite|build_guard'; then
+            echo 'Cleanup refused while a build/test process is still active.'
+            exit 1
+          fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
+          test ! -d target
+          test ! -d dist
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/nonexistent-opsterm-test-bus
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install core and egui dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libdbus-1-dev libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssh-client
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: 1.94.1
+          components: rustfmt, clippy
+      - name: Format check
+        run: python3 scripts/build_guard.py -- cargo fmt -p opsterm-core -p opsterm-egui --check
+      - name: Clippy core and egui
+        run: python3 scripts/build_guard.py -- cargo clippy -p opsterm-core -p opsterm-egui --locked --all-targets -- -D warnings
+      - name: Rust tests
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/opsterm-test-data
+        run: python3 scripts/build_guard.py -- cargo test -p opsterm-core -p opsterm-egui --locked -- --test-threads=1
+      - name: Clean build and test caches
+        if: always()
+        run: |
+          if pgrep -af 'cargo|vite|build_guard'; then
+            echo 'Cleanup refused while a build/test process is still active.'
+            exit 1
+          fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
+          test ! -d target
+          test ! -d src-tauri/target

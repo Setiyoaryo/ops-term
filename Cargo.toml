@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["core", "src-tauri", "native", "egui"]
+default-members = ["core", "egui"]
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+codegen-units = 16
+lto = "thin"
+opt-level = "s"
+panic = "abort"
+strip = true

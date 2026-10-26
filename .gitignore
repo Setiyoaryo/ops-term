@@ -1,0 +1,43 @@
+# Rust build output (workspace root + legacy)
+target/
+src-tauri/target/
+src-tauri/gen/
+release/
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+.vite/
+coverage/
+
+# Playwright / tests
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+.playwright-mcp/
+
+# Misc
+*.local
+*.log
+.DS_Store
+.opsterm-build.lock
+__pycache__/
+
+# Local secrets, inventories and runner identity (never public source)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+.credentials*
+.runner

@@ -1,0 +1,28 @@
+[package]
+name = "opsterm"
+version = "0.1.0"
+description = "OpsTerm - Linux-first secure terminal client for network operations"
+authors = ["OpsTerm contributors"]
+edition = "2021"
+license = "MIT"
+default-run = "opsterm"
+
+[lib]
+name = "opsterm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+opsterm-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+regex = "1"
+
+[dev-dependencies]

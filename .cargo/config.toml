@@ -1,0 +1,3 @@
+[build]
+# GTK/WebKit and Rust codegen can exhaust laptop RAM with Cargo's CPU default.
+jobs = 1

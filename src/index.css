@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, "Ubuntu", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background-color: #111418;
+}
+
+/* Keep the terminal viewport sized to its container without introducing
+   scrollbars on the surrounding layout. */
+.xterm,
+.xterm-viewport {
+  height: 100%;
+}
+
+/*
+ * Light chrome. OpsTerm's component palette is a small, fixed set of hex
+ * tokens; rather than fork every component, the light theme remaps those
+ * utility classes globally. Terminal palettes are independent (see theme.ts).
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="light"] html,
+:root[data-theme="light"] body,
+:root[data-theme="light"] #root {
+  background-color: #fafaf7;
+}
+
+:root[data-theme="light"] .bg-\[\#111418\] {
+  background-color: #fafaf7;
+}
+:root[data-theme="light"] .bg-\[\#15181C\] {
+  background-color: #f3f4f6;
+}
+:root[data-theme="light"] .bg-\[\#181C20\] {
+  background-color: #edeff2;
+}
+:root[data-theme="light"] .bg-\[\#1D2228\],
+:root[data-theme="light"] .hover\:bg-\[\#1D2228\]:hover {
+  background-color: #e1e4e8;
+}
+:root[data-theme="light"] .hover\:bg-\[\#2B323A\]:hover {
+  background-color: #d0d7de;
+}
+:root[data-theme="light"] .border-\[\#2B323A\] {
+  border-color: #d0d7de;
+}
+:root[data-theme="light"] .text-\[\#E5E9EF\] {
+  color: #1f2328;
+}
+:root[data-theme="light"] .text-\[\#C7CDD6\] {
+  color: #3a424b;
+}
+:root[data-theme="light"] .text-\[\#99A3AE\] {
+  color: #57606a;
+}
+:root[data-theme="light"] .text-\[\#5C6370\],
+:root[data-theme="light"] .placeholder\:text-\[\#5C6370\]::placeholder {
+  color: #6e7781;
+}
+:root[data-theme="light"] .bg-\[\#3a2a12\],
+:root[data-theme="light"] .bg-\[\#2a2416\] {
+  background-color: #fff8e1;
+}
+:root[data-theme="light"] .hover\:bg-\[\#2a2416\]:hover {
+  background-color: #fff3cd;
+}
+/* Status colors keep enough contrast on a light background. */
+:root[data-theme="light"] .text-amber-300 {
+  color: #92400e;
+}
+:root[data-theme="light"] .text-amber-400 {
+  color: #b45309;
+}
+:root[data-theme="light"] .text-red-400,
+:root[data-theme="light"] .hover\:text-red-400:hover {
+  color: #b91c1c;
+}
+:root[data-theme="light"] .text-emerald-400 {
+  color: #047857;
+}

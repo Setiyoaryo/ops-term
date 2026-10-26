@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the OpsTerm main window. The renderer is granted only window/core defaults; all filesystem and process operations go through validated Rust commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

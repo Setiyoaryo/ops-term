@@ -1,0 +1,25 @@
+[package]
+name = "opsterm-egui"
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+description = "OpsTerm custom-rendered UI (egui + alacritty_terminal)"
+
+[[bin]]
+name = "opsterm-egui"
+path = "src/main.rs"
+
+[dependencies]
+alacritty_terminal = "0.26"
+base64 = "0.22"
+ed25519-dalek = "2"
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+hex = "0.4"
+opsterm-core = { path = "../core" }
+portable-pty = "0.9"
+regex = "1.13.1"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+url = "2"
