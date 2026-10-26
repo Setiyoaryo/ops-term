@@ -25,7 +25,9 @@
     "e2e:report": "playwright show-report",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "python3 scripts/build_guard.py -- tauri build"
+    "tauri:build": "python3 scripts/build_guard.py -- tauri build",
+    "pages:build": "python3 scripts/build_guard.py -- python3 scripts/build_pages.py",
+    "pages:test": "python3 scripts/build_guard.py -- playwright test --config playwright.pages.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.4.0",

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111110">
+  <meta name="description" content="One terminal. Every connection. OpsTerm is an open-source native Linux workspace for SSH, Telnet, serial and local shells, built with Rust and egui.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="OpsTerm — One terminal. Every connection.">
+  <meta property="og:description" content="A native, open-source terminal workspace for the people keeping networks running.">
+  <meta property="og:url" content="https://setiyoaryo.github.io/ops-term/">
+  <meta name="twitter:card" content="summary">
+  <link rel="canonical" href="https://setiyoaryo.github.io/ops-term/">
+  <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+  <link rel="preload" href="./assets/JetBrainsMono-Regular.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./script.js" defer></script>
+  <title>OpsTerm — One terminal. Every connection.</title>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="#" aria-label="OpsTerm home"><span class="brand-mark" aria-hidden="true">&gt;_</span><span>ops<span class="brand-emphasis">term</span></span></a>
+      <nav id="navigation" class="navigation" aria-label="Main navigation">
+        <a href="#features">Features</a><a href="#appearance">Appearance</a><a href="#install">Install</a>
+        <a class="nav-github" href="https://github.com/Setiyoaryo/ops-term">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+      <button class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch color theme"><span aria-hidden="true">◐</span></button>
+      <button class="menu-toggle" type="button" aria-label="Open navigation" aria-controls="navigation" aria-expanded="false"><span></span><span></span></button>
+    </header>
+
+    <main id="main">
+      <section class="hero section-pad" aria-labelledby="hero-title">
+        <div class="hero-topline"><span class="eyebrow"><span class="signal" aria-hidden="true"></span> OPEN SOURCE. BUILT FOR OPERATIONS.</span><a class="release-link" href="{{RELEASE_URL}}">v{{VERSION}} <span aria-hidden="true">↗</span></a></div>
+        <div class="hero-grid">
+          <div>
+            <h1 id="hero-title">One terminal.<br><span>Every connection.</span></h1>
+            <p class="hero-description">A native workspace for SSH, Telnet, serial and local shells.<br class="desktop-break"> For the people keeping networks running.</p>
+            <div class="hero-actions"><a class="button primary" href="{{DOWNLOAD_URL}}" data-download>Download for Linux <span aria-hidden="true">↓</span></a><a class="text-link" href="https://github.com/Setiyoaryo/ops-term">Explore the source <span aria-hidden="true">↗</span></a></div>
+            <p class="download-note">Linux x86_64 <span>·</span> Free &amp; open source <span>·</span> No account needed</p>
+          </div>
+          <aside class="hero-aside" aria-label="At a glance"><div class="aside-label">LESS FRICTION.<br>MORE CONTROL.</div><div class="protocol-stack"><span>01 <b>SSH</b><i>↗</i></span><span>02 <b>Telnet</b><i>↗</i></span><span>03 <b>Serial</b><i>↗</i></span><span>04 <b>Local shell</b><i>↗</i></span></div><span class="aside-footnote">Different connections.<br>One familiar workspace.</span></aside>
+        </div>
+        <div class="workspace-wrap" id="appearance">
+          <div class="workspace-heading"><span><span class="tiny-cross" aria-hidden="true">+</span> YOUR WORKSPACE, YOUR WAY</span><div class="palette-switcher" role="group" aria-label="Preview text palette"><button type="button" data-palette="original" aria-pressed="false">Original</button><button type="button" data-palette="soft" aria-pressed="true">Soft</button><button type="button" data-palette="warm" aria-pressed="false">Warm</button><button type="button" data-palette="cool" aria-pressed="false">Cool</button></div></div>
+          <div class="workspace" data-palette="soft">
+            <div class="app-menubar"><span class="app-title"><span aria-hidden="true">&gt;_</span> OpsTerm</span><span>File</span><span>View</span><span>Tools</span><span>Help</span><span class="app-quick-connect">user@host <span>· Quick connect</span><b aria-hidden="true">↵</b></span><span class="demo-badge">DEMO</span></div>
+            <div class="app-body">
+              <aside class="app-sidebar" aria-label="Illustrative device library"><div class="sidebar-heading">DEVICES <span>+</span></div><div class="sidebar-search">⌕ &nbsp;Filter devices</div><div class="folder-label">▾ &nbsp;NETWORK LAB</div><div class="device active"><i></i><span>edge-01<small>192.0.2.10</small></span><em>SSH</em></div><div class="device"><i></i><span>core-01<small>198.51.100.20</small></span><em>SSH</em></div><div class="device"><i></i><span>console-01<small>/dev/ttyUSB0</small></span><em>SER</em></div><div class="folder-label second-folder">▸ &nbsp;SAVED WORKSPACES</div><div class="sidebar-bottom"><span aria-hidden="true">◇</span> All your sessions.<br>&nbsp;&nbsp; In one place.</div></aside>
+              <div class="app-content"><div class="app-tabs" role="tablist" aria-label="Illustrative session preview"><button id="tab-ssh" role="tab" aria-selected="true" aria-controls="preview-ssh" data-session="ssh"><i></i> edge-01 <span aria-hidden="true">×</span></button><button id="tab-local" role="tab" aria-selected="false" aria-controls="preview-local" data-session="local"><span aria-hidden="true">&gt;_</span> Local shell <span aria-hidden="true">×</span></button><span class="tab-add" aria-hidden="true">+</span></div>
+                <div class="terminal-screen" id="preview-ssh" role="tabpanel" aria-labelledby="tab-ssh" tabindex="0"><pre><span class="term-muted"># A quieter place for your busiest work.</span>
+
+<span class="term-green">ops</span><span class="term-muted">@</span><span class="term-blue">edge-01</span><span class="term-muted">:~ $</span> show interfaces status
+
+<span class="term-muted">INTERFACE    STATE    SPEED    DESCRIPTION</span>
+──────────── ──────── ──────── ──────────────────────
+<span class="term-blue">ge-0/0/0</span>     <span class="term-green">up</span>       10G      Core uplink
+<span class="term-blue">ge-0/0/1</span>     <span class="term-green">up</span>       10G      Distribution
+<span class="term-blue">ge-0/0/2</span>     <span class="term-yellow">down</span>     auto     Spare
+<span class="term-blue">ge-0/0/3</span>     <span class="term-green">up</span>       1G       Management
+
+<span class="term-green">ops</span><span class="term-muted">@</span><span class="term-blue">edge-01</span><span class="term-muted">:~ $</span> <span class="terminal-cursor" aria-hidden="true"> </span></pre></div>
+                <div class="terminal-screen" id="preview-local" role="tabpanel" aria-labelledby="tab-local" tabindex="0" hidden><pre><span class="term-muted"># Keep the work moving. Keep the noise down.</span>
+
+<span class="term-green">ops</span><span class="term-muted">@</span><span class="term-blue">workstation</span><span class="term-muted">:~ $</span> ls ~/network-lab
+
+<span class="term-blue">configs/</span>     <span class="term-blue">runbooks/</span>     <span class="term-blue">backups/</span>
+<span class="term-yellow">inventory.csv</span>  notes.md
+
+<span class="term-green">ops</span><span class="term-muted">@</span><span class="term-blue">workstation</span><span class="term-muted">:~ $</span> cat notes.md
+
+One workspace for the work that matters.
+Your hosts. Your commands. Your connections.
+
+<span class="term-green">ops</span><span class="term-muted">@</span><span class="term-blue">workstation</span><span class="term-muted">:~ $</span> <span class="terminal-cursor" aria-hidden="true"> </span></pre></div>
+              </div>
+            </div>
+            <div class="app-statusbar"><span><i></i> Illustrative workspace</span><span>Rust + egui</span><span class="status-right">SSH · TELNET · SERIAL · LOCAL</span></div>
+          </div>
+          <div class="workspace-caption"><span>FIG. 01 — ONE WORKSPACE. FOUR WAYS TO CONNECT.</span><span>Try the tabs &amp; palettes above. Demo data; no live connections.</span></div>
+        </div>
+      </section>
+
+      <div class="capability-strip" aria-label="Product principles"><span><b>[01]</b> Native Rust + egui</span><span><b>[02]</b> Linux first</span><span><b>[03]</b> MIT licensed</span><span><b>[04]</b> Signed releases</span></div>
+
+      <section class="features section-pad" id="features" aria-labelledby="features-title">
+        <div class="section-heading"><span class="eyebrow">[ THE WORKSPACE ]</span><h2 id="features-title">For real operations.<br><span>For everyday work.</span></h2><p>Your device library, active sessions and everyday commands, together in a native desktop workspace.</p></div>
+        <div class="feature-grid"><article><span class="feature-number">01 / CONNECT</span><h3>All the right connections.</h3><p>SSH, Telnet, serial consoles and local shells. Switch between them without switching your workflow.</p><div class="mini-tags"><span>SSH</span><span>TELNET</span><span>SERIAL</span><span>LOCAL</span></div></article><article><span class="feature-number">02 / ORGANIZE</span><h3>A home for your hosts.</h3><p>Group saved devices into folders. Search your library, open a session, and pick up where the work left off.</p><div class="feature-annotation"><span aria-hidden="true">└─</span> devices / workspaces / sessions</div></article><article><span class="feature-number">03 / WORK</span><h3>Make the routine lighter.</h3><p>Tabbed sessions, split views, command libraries and runbooks. Broadcast commands to the targets you choose.</p><div class="feature-annotation"><span aria-hidden="true">&gt;_</span> Less repetition. More intention.</div></article><article><span class="feature-number">04 / MAKE IT YOURS</span><h3>A terminal that feels right.</h3><p>Choose your font, palette and text brightness. Find, highlight and select output in a workspace that stays readable.</p><a class="inline-link" href="#appearance">Explore the preview <span aria-hidden="true">↑</span></a></article></div>
+      </section>
+
+      <section class="trust section-pad" aria-labelledby="trust-title"><div class="trust-heading"><span class="eyebrow">[ TRUST THE CONNECTION ]</span><h2 id="trust-title">The details<br>that matter<span class="accent">.</span></h2><p>Security belongs in the workflow.<br>Not in a footnote.</p><a class="inline-link" href="https://github.com/Setiyoaryo/ops-term/blob/main/SECURITY.md">Read the security notes <span aria-hidden="true">↗</span></a></div><div class="trust-list"><article><span aria-hidden="true">↳</span><div><h3>Host-key verification.</h3><p>SSH host-key checks stay enabled. Keep known hosts verified and review the keys you trust.</p></div></article><article><span aria-hidden="true">↳</span><div><h3>Your encrypted vault.</h3><p>Store credentials in an encrypted vault on your machine, protected by your master password.</p></div></article><article><span aria-hidden="true">↳</span><div><h3>Updates you can verify.</h3><p>Ed25519 signatures and SHA-256 checks before installation. A rollback copy when you update.</p></div></article></div></section>
+
+      <section class="install section-pad" id="install" aria-labelledby="install-title"><div class="section-heading install-heading"><span class="eyebrow">[ GET STARTED ]</span><h2 id="install-title">Your next session<br>starts here<span class="accent">_</span></h2><p>Download the Linux release or build it yourself. No account, subscription or extra service required.</p></div><div class="install-panel"><div class="install-tabs" role="tablist" aria-label="Installation method"><button role="tab" type="button" id="install-download" aria-controls="commands-download" aria-selected="true" data-install="download">Linux download</button><button role="tab" type="button" id="install-source" aria-controls="commands-source" aria-selected="false" data-install="source">Build from source</button><span>v{{VERSION}}</span></div><div class="command-toolbar"><span class="term-muted">$ <span data-command-label>verify, then install</span></span><button type="button" class="copy-button" aria-label="Copy install commands">Copy <span aria-hidden="true">⧉</span></button></div><pre class="install-code" id="commands-download" role="tabpanel" aria-labelledby="install-download" tabindex="0"><code>curl -fLO '{{DOWNLOAD_URL}}' &amp;&amp;
+curl -fLO '{{DOWNLOAD_URL}}.sha256' &amp;&amp;
+sha256sum -c '{{ASSET_NAME}}.sha256' &amp;&amp;
+install -Dm755 '{{ASSET_NAME}}' "$HOME/.local/bin/opsterm-egui"</code></pre><pre class="install-code" id="commands-source" role="tabpanel" aria-labelledby="install-source" tabindex="0" hidden><code>git clone https://github.com/Setiyoaryo/ops-term.git &amp;&amp;
+cd ops-term &amp;&amp;
+npm run build:egui &amp;&amp;
+install -Dm755 target/release/opsterm-egui "$HOME/.local/bin/opsterm-egui" &amp;&amp;
+npm run clean</code></pre><div class="install-notes"><span data-install-note>Ubuntu 24.04 · x86_64 · curl + CA certificates for updates.</span><span class="copy-status" role="status" aria-live="polite"></span></div></div><div class="install-links"><a href="{{RELEASE_URL}}">Release notes &amp; checksums <span aria-hidden="true">↗</span></a><a href="https://github.com/Setiyoaryo/ops-term#requirements">Build requirements <span aria-hidden="true">↗</span></a></div></section>
+
+      <section class="faq section-pad" aria-labelledby="faq-title"><div><span class="eyebrow">[ A FEW THINGS TO KNOW ]</span><h2 id="faq-title">Good questions.</h2></div><div class="faq-list"><details><summary>Is OpsTerm free and open source?<span aria-hidden="true">+</span></summary><p>Yes. OpsTerm is available under the MIT license. You can use it, inspect the source, and contribute on GitHub.</p></details><details><summary>Which platforms are supported?<span aria-hidden="true">+</span></summary><p>The published release is for Linux x86_64, built on Ubuntu 24.04. Other environments can build from source; check the repository for requirements and compatibility notes.</p></details><details><summary>How do automatic updates work?<span aria-hidden="true">+</span></summary><p>The app checks GitHub Releases for new signed versions. Choose when to install and restart, so an update does not interrupt your active terminal sessions.</p></details><details><summary>Can I make the text less bright?<span aria-hidden="true">+</span></summary><p>Yes. Open Settings → Appearance to choose a font, select Original, Soft, Warm or Cool, and adjust text brightness. Try the live palette preview above.</p></details></div></section>
+
+      <section class="closing section-pad"><span class="eyebrow">[ BUILT IN THE OPEN ]</span><p>For the work that<br>keeps everything running.</p><a class="button primary" href="{{DOWNLOAD_URL}}" data-download>Make room for OpsTerm <span aria-hidden="true">↓</span></a></section>
+    </main>
+
+    <footer class="site-footer"><a class="brand" href="#" aria-label="Back to OpsTerm home"><span class="brand-mark" aria-hidden="true">&gt;_</span><span>opsterm</span></a><span>Native. Open. Yours.</span><div><a href="https://github.com/Setiyoaryo/ops-term">GitHub ↗</a><a href="https://github.com/Setiyoaryo/ops-term/issues">Issues ↗</a><a href="https://github.com/Setiyoaryo/ops-term/blob/main/LICENSE">MIT License ↗</a></div></footer>
+  </div>
+</body>
+</html>

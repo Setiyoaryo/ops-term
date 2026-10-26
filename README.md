@@ -119,18 +119,19 @@ npm run tauri:build        # .deb
 ## Requirements
 
 - Ubuntu 22.04 / 24.04 LTS x86_64
-- Rust (stable), Python 3.10+ for guarded builds, and Node.js 20+ with npm for the Tauri client
+- Rust (stable), Python 3.10+ for guarded builds, and Node.js 20+ with npm for the guarded build scripts
 - System libraries:
   - Tauri client: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev`
   - GTK4 client: `libgtk-4-dev libvte-2.91-gtk4-dev libadwaita-1-dev`
-  - egui client: none beyond a GPU/GL stack
+  - egui build: `libdbus-1-dev libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev`; runtime needs a working GPU/GL stack
 - `openssh-client` (SSH; absent → the app shows an install hint)
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential pkg-config curl wget file openssh-client \
   libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev \
-  libgtk-4-dev libvte-2.91-gtk4-dev libadwaita-1-dev
+  libgtk-4-dev libvte-2.91-gtk4-dev libadwaita-1-dev \
+  libdbus-1-dev libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev
 ```
 
 ## Test & lint
@@ -245,3 +246,23 @@ Secrets live only in the OS keyring. See [`SECURITY.md`](SECURITY.md).
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
+
+## Product website
+
+The public landing page is [setiyoaryo.github.io/ops-term](https://setiyoaryo.github.io/ops-term/).
+Its standalone source lives in `website/`, separate from the desktop frontend.
+
+```bash
+npm run pages:build                  # checked-in stable release snapshot
+npm run pages:build -- --live-release # latest public GitHub release
+npm run pages:test                   # desktop + mobile browser checks
+npm run clean -- --dist              # after inspecting the output
+```
+
+GitHub Pages publishes after site changes on `main`, manual dispatch, or a
+successful `Release egui` workflow. Builds validate the official download asset
+and run browser checks before deployment. If the GitHub API is temporarily
+unavailable, the build uses `website/release.json`; refresh that snapshot when
+publishing a new stable release. Configure the repository's Pages source as
+**GitHub Actions**. The website serves its font locally; the font's OFL license
+is included in `website/assets/`.

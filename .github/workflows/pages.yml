@@ -1,0 +1,73 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'scripts/build_pages.py'
+      - 'scripts/test_pages.py'
+      - 'playwright.pages.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Release egui']
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Validate release metadata and build the site
+        run: |
+          python3 scripts/build_guard.py -- python3 -m unittest scripts/test_pages.py
+          npm run pages:build -- --live-release
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Check desktop and mobile interactions
+        run: npm run pages:test
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: dist/pages
+          retention-days: 1
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      - name: Clean generated output
+        if: always()
+        run: |
+          if pgrep -af 'cargo|vite|build_guard'; then
+            echo 'Cleanup refused while a build/test process is still active.'
+            exit 1
+          fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
+          test ! -d target
+          test ! -d dist
+          test ! -d test-results
