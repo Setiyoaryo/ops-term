@@ -9,6 +9,8 @@ Architecture: standalone static HTML/CSS/JS in website/, separate from the deskt
 - [x] Prove release metadata/URL validation with failing tests, then implement the builder and landing page.
 - [x] Test real browser behavior: navigation, install/source copy, palette/session previews, FAQ, desktop/mobile layouts, console/network errors and no horizontal viewport overflow. Inspect screenshots.
 - [x] Review code and publishing permissions. Add a GitHub Pages workflow triggered by website changes, manual dispatch and successful release workflow completion; refresh release metadata at build time.
-- [ ] Enable Pages, publish the verified commit, confirm the live HTTPS page and set the repo homepage link. Clean generated output after artifacts/screenshots are used.
+- [x] Enable Pages, publish the verified commit, confirm the live HTTPS page and set the repo homepage link. Clean generated output after artifacts/screenshots are used.
 
 Verification before publication: 3 metadata/template tests and 8 desktop/mobile Playwright checks passed; desktop/mobile screenshots inspected; actionlint passed. Independent review found a build-prerequisites link and missing D-Bus development dependency in README; both corrected.
+
+Published: https://setiyoaryo.github.io/ops-term/. Pages workflow [40340655616](https://github.com/Setiyoaryo/ops-term/actions/runs/40340655616) succeeded at commit 010a64d. Public HTTPS content and versioned downloads verified; all 8 browser checks also passed against the deployed URL. Repository homepage now points to Pages. Initial deployment was cancelled after an unusually slow Ubuntu apt font download; using the hosted runner’s existing browser libraries and installing only the headless browser resolved it without removing checks. Generated local output and caches cleaned.
