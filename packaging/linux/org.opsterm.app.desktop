@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpsTerm
+Comment=SSH and serial terminal workspace
+Exec=opsterm-egui
+Icon=org.opsterm.app
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=org.opsterm.app

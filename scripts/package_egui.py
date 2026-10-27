@@ -12,7 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Ubuntu 22.04 / Python 3.10
+    import tomli as tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +89,7 @@ def main() -> int:
     parser.add_argument("--notes", default=os.environ.get("OPSTERM_RELEASE_NOTES", ""))
     parser.add_argument("--key", type=Path, default=Path(os.environ.get("OPSTERM_UPDATE_SIGNING_KEY", DEFAULT_KEY)))
     parser.add_argument("--keep-target", action="store_true")
+    parser.add_argument("--portable", action="store_true", help="also create baseline-validated archive and AppImage")
     parser.add_argument("--tag", help="require a matching stable GitHub release tag")
     args = parser.parse_args()
     release_version = version()
@@ -147,36 +151,28 @@ def main() -> int:
         if not args.keep_target:
             subprocess.run(["bash", "scripts/clean.sh"], cwd=ROOT, check=False)
 
-    payload = package.read_bytes()
-    digest = hashlib.sha256(payload).hexdigest()
-    asset_url = f"{base}/{name}"
-    canonical = (
-        f"{MANIFEST_PREFIX}\n{release_version}\n{asset_key}\n"
-        f"{len(payload)}\n{digest}\n{asset_url}"
-    )
-    signature = sign(args.key, canonical)
-    notes = args.notes or (
-        f"Local OpsTerm build {release_version}"
-        if args.local
-        else f"OpsTerm {release_version}"
-    )
-
-    manifest = {
-        "version": release_version,
-        "notes": notes,
-        "assets": {
-            asset_key: {
-                "url": asset_url,
-                "size": len(payload),
-                "sha256": digest,
-                "signature": signature,
-            }
-        },
-    }
+    packages = {asset_key: package}
+    if args.portable:
+        from linux_distribution import build_distribution
+        archive, image = build_distribution(package, release_version, machine, release)
+        packages[asset_key + "-tar"] = archive
+        packages[asset_key + "-appimage"] = image
+    assets = {}
+    for key, path in packages.items():
+        payload = path.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        asset_url = f"{base}/{path.name}"
+        canonical = f"{MANIFEST_PREFIX}\n{release_version}\n{key}\n{len(payload)}\n{digest}\n{asset_url}"
+        signature = sign(args.key, canonical)
+        assets[key] = {"url": asset_url, "size": len(payload), "sha256": digest, "signature": signature}
+        (release / f"{path.name}.sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+        (release / f"{path.name}.sig").write_text(signature + "\n", encoding="utf-8")
+    notes = args.notes or (f"Local OpsTerm build {release_version}" if args.local else f"OpsTerm {release_version}")
+    manifest = {"version": release_version, "notes": notes, "assets": assets}
     (release / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    (release / f"{name}.sha256").write_text(f"{digest}  {name}\n", encoding="utf-8")
-    (release / f"{name}.sig").write_text(signature + "\n", encoding="utf-8")
-
+    # Keep CLI summary focused on the native binary's signed asset.
+    digest = assets[asset_key]["sha256"]
+    asset_url = assets[asset_key]["url"]
     print(f"binary:   {package}")
     print(f"sha256:   {digest}")
     print(f"manifest: {release / 'manifest.json'}")

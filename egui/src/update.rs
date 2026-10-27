@@ -170,9 +170,12 @@ impl Updater {
         let Some(available) = self.available.clone() else {
             return;
         };
-        let Ok(executable) = std::env::current_exe() else {
-            self.error = Some("Cannot locate the running executable.".into());
-            return;
+        let executable = match install_target(&available) {
+            Ok(path) => path,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
         };
         self.installing = true;
         self.error = None;
@@ -274,22 +277,40 @@ impl Updater {
 }
 
 pub fn restart(executable: &Path) -> Result<(), String> {
-    let spawned = Command::new("setsid")
-        .arg(executable)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    if spawned.is_ok() {
+    let appimage = crate::distribution::is_appimage_file(executable)?;
+    if restart_command(executable, true, appimage).spawn().is_ok() {
         return Ok(());
     }
-    Command::new(executable)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    restart_command(executable, false, appimage)
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("could not restart OpsTerm: {error}"))
+}
+
+fn restart_command(executable: &Path, detached: bool, appimage: bool) -> Command {
+    let mut command = if detached {
+        let mut command = Command::new("setsid");
+        command.arg(executable);
+        command
+    } else {
+        Command::new(executable)
+    };
+    if appimage {
+        // Restart must also work when the original launch used extraction mode
+        // explicitly on a machine with no usable FUSE runtime.
+        command.arg("--appimage-extract-and-run");
+        // The previous mount/extraction can disappear after replacement. Let the
+        // new image reconstruct its own runtime context, preserving display,
+        // agent sockets, and every unrelated environment variable.
+        for name in ["APPIMAGE", "APPDIR", "ARGV0", "OWD"] {
+            command.env_remove(name);
+        }
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
 }
 
 fn public_key_text() -> &'static str {
@@ -310,10 +331,6 @@ fn load_config() -> UpdateConfig {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
-}
-
-fn asset_key() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn allow_http() -> bool {
@@ -474,7 +491,7 @@ fn should_offer_version(current: &Version, remote: &Version, local_development: 
 fn check_remote(url: &str) -> Result<Option<Available>, String> {
     let source = manifest_source(url)?;
     let manifest = fetch_manifest(&source)?;
-    let key = asset_key();
+    let key = crate::distribution::asset_key()?;
     let asset = manifest
         .assets
         .get(&key)
@@ -504,16 +521,20 @@ fn check_remote(url: &str) -> Result<Option<Available>, String> {
 }
 
 fn installed_matches(asset: &Asset) -> bool {
-    let Ok(executable) = std::env::current_exe() else {
+    let Ok(executable) = crate::distribution::executable_path() else {
         return false;
     };
-    let Ok(metadata) = fs::metadata(&executable) else {
+    installed_path_matches(&executable, asset)
+}
+
+fn installed_path_matches(executable: &Path, asset: &Asset) -> bool {
+    let Ok(metadata) = fs::metadata(executable) else {
         return false;
     };
     if metadata.len() != asset.size {
         return false;
     }
-    let Ok(bytes) = fs::read(&executable) else {
+    let Ok(bytes) = fs::read(executable) else {
         return false;
     };
     hex::encode(Sha256::digest(bytes)).eq_ignore_ascii_case(&asset.sha256)
@@ -564,10 +585,26 @@ fn download_and_verify(available: &Available) -> Result<Vec<u8>, String> {
     if !digest.eq_ignore_ascii_case(&available.asset.sha256) {
         return Err("downloaded update failed its SHA-256 check".into());
     }
+    validate_executable_format(&bytes, &available.asset_key)?;
+    Ok(bytes)
+}
+
+fn validate_executable_format(bytes: &[u8], asset_key: &str) -> Result<(), String> {
     if !bytes.starts_with(b"\x7fELF") {
         return Err("downloaded update is not a Linux executable".into());
     }
-    Ok(bytes)
+    let appimage = crate::distribution::is_appimage_bytes(bytes);
+    if appimage != asset_key.ends_with("-appimage") {
+        return Err("downloaded update format does not match its signed asset key".into());
+    }
+    Ok(())
+}
+
+fn install_target(available: &Available) -> Result<PathBuf, String> {
+    if available.asset_key != crate::distribution::asset_key()? {
+        return Err("update asset does not match the running distribution".into());
+    }
+    crate::distribution::executable_path()
 }
 
 pub fn cli(args: &[String]) -> Option<i32> {
@@ -604,10 +641,10 @@ pub fn cli(args: &[String]) -> Option<i32> {
             if !install {
                 return Some(0);
             }
-            let executable = match std::env::current_exe() {
+            let executable = match install_target(&available) {
                 Ok(path) => path,
                 Err(error) => {
-                    eprintln!("update: cannot locate the running executable: {error}");
+                    eprintln!("update: {error}");
                     return Some(2);
                 }
             };
@@ -757,6 +794,86 @@ mod tests {
         let (asset, key) = signed_asset("1.2.3", "linux-x86_64", b"binary");
         assert!(verify_signature("1.2.3", "linux-x86_64", &asset, &key).is_ok());
         assert!(verify_signature("1.2.4", "linux-x86_64", &asset, &key).is_err());
+    }
+
+    #[test]
+    fn appimage_asset_key_is_part_of_the_signature() {
+        let bytes = b"\x7fELF\0\0\0\0AI\x02payload";
+        let (asset, key) = signed_asset("1.2.3", "linux-x86_64-appimage", bytes);
+        assert!(verify_signature("1.2.3", "linux-x86_64-appimage", &asset, &key).is_ok());
+        assert!(verify_signature("1.2.3", "linux-x86_64", &asset, &key).is_err());
+    }
+
+    #[test]
+    fn signed_asset_format_cannot_cross_distribution_types() {
+        let image = b"\x7fELF\0\0\0\0AI\x02payload";
+        let raw = b"\x7fELFbinary";
+        assert!(validate_executable_format(image, "linux-x86_64-appimage").is_ok());
+        assert!(validate_executable_format(raw, "linux-x86_64").is_ok());
+        assert!(validate_executable_format(raw, "linux-x86_64-appimage").is_err());
+        assert!(validate_executable_format(image, "linux-x86_64").is_err());
+        assert!(validate_executable_format(b"not ELF!AI\x02", "linux-x86_64-appimage").is_err());
+    }
+
+    #[test]
+    fn appimage_restart_clears_only_old_runtime_context_for_both_launchers() {
+        for detached in [false, true] {
+            let command = restart_command(Path::new("/tmp/OpsTerm.AppImage"), detached, true);
+            let expected_args: Vec<&std::ffi::OsStr> = if detached {
+                vec![
+                    "/tmp/OpsTerm.AppImage".as_ref(),
+                    "--appimage-extract-and-run".as_ref(),
+                ]
+            } else {
+                vec!["--appimage-extract-and-run".as_ref()]
+            };
+            assert_eq!(command.get_args().collect::<Vec<_>>(), expected_args);
+            let changes: Vec<_> = command.get_envs().collect();
+            assert_eq!(changes.len(), 4);
+            for name in ["APPIMAGE", "APPDIR", "ARGV0", "OWD"] {
+                assert!(changes
+                    .iter()
+                    .any(|(key, value)| *key == name && value.is_none()));
+            }
+            let raw = restart_command(Path::new("/tmp/opsterm"), detached, false);
+            assert_eq!(raw.get_envs().count(), 0);
+            let expected_raw_args: Vec<&std::ffi::OsStr> = if detached {
+                vec!["/tmp/opsterm".as_ref()]
+            } else {
+                vec![]
+            };
+            assert_eq!(raw.get_args().collect::<Vec<_>>(), expected_raw_args);
+        }
+    }
+
+    #[test]
+    fn appimage_install_replaces_outer_image_and_hashes_it_for_rebuild_checks() {
+        let directory = std::env::temp_dir().join(format!(
+            "opsterm-image-install-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(directory.join("mount/usr/bin")).unwrap();
+        let mounted = directory.join("mount/usr/bin/opsterm");
+        fs::write(&mounted, b"mounted ELF executable").unwrap();
+        let outer = directory.join("OpsTerm.AppImage");
+        let old = b"\x7fELF\0\0\0\0AI\x02old image";
+        let new = b"\x7fELF\0\0\0\0AI\x02new image";
+        fs::write(&outer, old).unwrap();
+        let (asset, _) = signed_asset("1.2.3", "linux-x86_64-appimage", new);
+        assert!(!installed_path_matches(&outer, &asset));
+        assert_eq!(install_bytes(&outer, new).unwrap(), outer);
+        assert!(installed_path_matches(&outer, &asset));
+        assert!(!installed_path_matches(&mounted, &asset));
+        assert_eq!(fs::read(&mounted).unwrap(), b"mounted ELF executable");
+        assert_eq!(
+            fs::read(directory.join(".OpsTerm.AppImage.old")).unwrap(),
+            old
+        );
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

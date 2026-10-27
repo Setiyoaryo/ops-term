@@ -1,6 +1,6 @@
 [package]
 name = "opsterm-egui"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
 description = "OpsTerm custom-rendered UI (egui + alacritty_terminal)"
@@ -24,3 +24,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 url = "2"
+
+# Explicit backend selection preserves the child shell environment.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland"] }

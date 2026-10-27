@@ -1,0 +1,22 @@
+D-Bus (statically linked into OpsTerm)
+===================================
+Copyright (C) D-Bus contributors, including Red Hat Inc.; individual
+copyright and attribution notices are retained in the source files.
+
+D-Bus is used under the Academic Free License version 2.1 (AFL-2.1),
+one of the alternatives offered by its copyright holders. The complete
+upstream COPYING file is included as dbus-COPYING. This notice does not
+apply the GPL alternative to OpsTerm. No D-Bus standalone tools are bundled.
+
+Exact source archive (includes vendor/dbus and its attribution notices):
+https://static.crates.io/crates/libdbus-sys/libdbus-sys-0.2.7.crate
+Crate: libdbus-sys 0.2.7
+SHA-256 (Cargo.lock):
+328c4789d42200f1eeec05bd86c9c13c7f091d2ba9a6ea35acdf51f31bc0f043
+
+The vendored upstream D-Bus source is unmodified by OpsTerm. Compilation
+uses the libdbus-sys vendored build support. Source and copyright notices
+can be obtained by downloading and extracting the archive above.
+
+The libdbus-sys Rust binding/build code is MIT OR Apache-2.0 licensed;
+its original LICENSE-MIT and LICENSE-APACHE are also in that source archive.

@@ -67,10 +67,10 @@ impl Confirmation {
                 "Close session?", format!("Close “{title}” and remove its terminal output from this workspace? Running commands may be interrupted."), "Close session",
             ),
             Target::Application { sessions } => (
-                "Close OpsTerm?", format!("This closes {sessions} open session(s). Running commands may be interrupted."), "Close OpsTerm",
+                "Close OpsTerm?", format!("This interrupts {sessions} active session(s). Running commands may be interrupted."), "Close OpsTerm",
             ),
             Target::Restart { sessions, .. } => (
-                "Restart OpsTerm?", format!("Restarting closes {sessions} open session(s). Running commands may be interrupted."), "Restart",
+                "Restart OpsTerm?", format!("Restarting interrupts {sessions} active session(s). Running commands may be interrupted."), "Restart",
             ),
         };
         let mut cancel = false;

@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 
 from scripts.package_egui import validate_release_tag, version
 
@@ -42,15 +43,34 @@ def should_mark_latest(tag: str, latest_tag: str | None) -> bool:
     return latest_tag is None or candidate >= stable_version(latest_tag)
 
 
+def release_files(directory: Path, release_version: str) -> list[Path]:
+    manifest_path = directory / "manifest.json"
+    if manifest_path.is_symlink():
+        raise ValueError("manifest must be a regular file")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("version") != release_version or not manifest.get("assets"):
+        raise ValueError("manifest version/assets do not match the release")
+    pattern = re.compile(r"opsterm-egui-" + re.escape(release_version) + r"-linux-(?:x86_64|aarch64)(?:\.AppImage|\.tar\.gz)?")
+    files = [manifest_path]
+    names = set()
+    for asset in manifest["assets"].values():
+        url = urlsplit(asset["url"])
+        name = url.path.rsplit("/", 1)[-1]
+        if url.scheme not in ("https", "http", "file") or url.query or url.fragment or ".." in url.path.split("/") or not pattern.fullmatch(name) or name in names:
+            raise ValueError("manifest contains an unsafe or duplicate release filename")
+        names.add(name)
+        files.extend(directory / (name + suffix) for suffix in ("", ".sha256", ".sig"))
+    if any(path.is_symlink() or not path.is_file() or path.stat().st_size == 0 for path in files):
+        raise RuntimeError("all manifest assets and their signature/checksum sidecars are required")
+    return files
+
+
 def publish(repository: str, tag: str, directory: Path) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", repository):
         raise ValueError("repository must use owner/name format")
     release_version = version()
     validate_release_tag(tag, release_version)
-    binary = f"opsterm-egui-{release_version}-linux-x86_64"
-    files = [directory / name for name in [binary, f"{binary}.sha256", f"{binary}.sig", "manifest.json"]]
-    if any(path.is_symlink() or not path.is_file() or path.stat().st_size == 0 for path in files):
-        raise RuntimeError("all four nonempty, regular release assets are required")
+    files = release_files(directory, release_version)
 
     existing = get_release(repository, tag)
     if existing is not None and existing.get("draft") is not True:

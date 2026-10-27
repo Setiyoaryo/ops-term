@@ -32,7 +32,7 @@ jobs:
       - run: python3 scripts/build_guard.py -- npm test
       - run: npm run test:build-guard
       - name: Release packaging metadata tests
-        run: python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py
+        run: python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py scripts/test_linux_distribution.py scripts/test_merge_release.py scripts/test_release_assets.py
       - name: Install Playwright headless browser
         # Hosted Ubuntu already provides Chrome runtime libraries.
         # Keep the real browser checks while avoiding slow apt font mirrors.

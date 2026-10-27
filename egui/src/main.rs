@@ -37,6 +37,8 @@ mod close_confirmation;
 mod command_input;
 mod connections;
 mod device_list;
+mod display_backend;
+mod distribution;
 mod quick_connect;
 mod remote_files;
 mod repaint;
@@ -271,6 +273,13 @@ struct Session {
 }
 
 impl Session {
+    fn close_is_risky(&self) -> bool {
+        !self.opening
+            && !self.exited
+            && self.provider.is_alive()
+            && (!matches!(self.origin, Origin::Local) || self.provider.has_running_command())
+    }
+
     fn new(
         title: String,
         provider: Box<dyn ConnectionProvider>,
@@ -3342,12 +3351,28 @@ impl App {
         };
     }
 
+    fn risky_session_count(&self) -> usize {
+        self.sessions
+            .iter()
+            .filter(|session| session.close_is_risky())
+            .count()
+    }
+
     fn request_close_tab(&mut self, index: usize) {
         let Some(session) = self.sessions.get(index) else {
             return;
         };
         self.close_input_blocked = true;
         self.close_blocked_frame = self.context.as_ref().map(|ctx| ctx.cumulative_frame_nr());
+        let risky = session.close_is_risky();
+        if !risky {
+            self.close_tab(index);
+            self.terminal_focus = self.sessions.get(self.active).map(|session| session.id);
+            if let Some(ctx) = &self.context {
+                close_confirmation::discard_background_keyboard(ctx);
+            }
+            return;
+        }
         self.close_confirmation
             .request(close_confirmation::Target::Tab {
                 id: session.id,
@@ -3362,13 +3387,16 @@ impl App {
         if !self.allow_close
             && self.close_blocked_frame != Some(ctx.cumulative_frame_nr())
             && ctx.input(|i| i.viewport().close_requested())
-            && !self.sessions.is_empty()
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.close_confirmation
-                .request(close_confirmation::Target::Application {
-                    sessions: self.sessions.len(),
-                });
+            // A simultaneous Enter must never reach a terminal or editor,
+            // including when an idle workspace closes without a prompt.
+            self.close_blocked_frame = Some(ctx.cumulative_frame_nr());
+            let sessions = self.risky_session_count();
+            if sessions > 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.close_confirmation
+                    .request(close_confirmation::Target::Application { sessions });
+            }
         }
     }
 
@@ -6323,6 +6351,7 @@ impl App {
         let mut check = false;
         let mut install = false;
         let mut restart_now = false;
+        let risky_sessions = self.risky_session_count();
         let updater = &mut self.updater;
         egui::Window::new("Software update")
             .open(&mut open)
@@ -6445,11 +6474,11 @@ impl App {
         }
         if restart_now {
             if let Some(path) = updater.installed.clone() {
-                if !self.sessions.is_empty() {
+                if risky_sessions > 0 {
                     self.close_confirmation
                         .request(close_confirmation::Target::Restart {
                             path,
-                            sessions: self.sessions.len(),
+                            sessions: risky_sessions,
                         });
                     close_confirmation::discard_background_keyboard(ctx);
                 } else {
@@ -6537,6 +6566,11 @@ fn main() -> eframe::Result<()> {
             std::process::exit(2);
         }
     };
+    let backend = display_backend::parse(std::env::var("OPSTERM_DISPLAY_BACKEND").ok().as_deref())
+        .unwrap_or_else(|error| {
+            eprintln!("OpsTerm: {error}");
+            std::process::exit(2);
+        });
     let window_title = match &launch {
         startup::Launch::Telnet { title, .. } => format!("{title} — OpsTerm"),
         _ => "OpsTerm".into(),
@@ -6547,13 +6581,28 @@ fn main() -> eframe::Result<()> {
         startup::Launch::Telnet { spec, title } => app.open_telnet_console(spec, title),
         _ => app.new_local(),
     }
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([760.0, 500.0])
             .with_title(window_title),
         ..Default::default()
     };
+    match backend {
+        display_backend::Backend::Auto => {}
+        display_backend::Backend::X11 => {
+            options.event_loop_builder = Some(Box::new(|builder| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                builder.with_x11();
+            }));
+        }
+        display_backend::Backend::Wayland => {
+            options.event_loop_builder = Some(Box::new(|builder| {
+                use winit::platform::wayland::EventLoopBuilderExtWayland;
+                builder.with_wayland();
+            }));
+        }
+    }
     eframe::run_native(
         "OpsTerm",
         options,
@@ -8397,18 +8446,137 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_tab_output_is_not_closed_without_confirmation() {
+    fn disconnected_tab_closes_without_confirmation() {
         let mut app = test_app();
         let (mut session, _) = test_session(std::io::empty());
         session.exited = true;
         app.sessions.push(session);
         app.request_close_tab(0);
-        assert_eq!(
-            app.sessions.len(),
-            1,
-            "disconnected tab output was removed without confirmation"
-        );
+        assert!(app.sessions.is_empty());
+        assert!(!app.close_confirmation.active());
+        assert!(app.close_input_blocked);
+    }
+
+    struct IdleProvider(TestProvider);
+    impl ConnectionProvider for IdleProvider {
+        fn write(&self, bytes: &[u8]) -> opsterm_core::error::AppResult<()> {
+            self.0.write(bytes)
+        }
+        fn resize(&self, dims: TerminalDimensions) -> opsterm_core::error::AppResult<()> {
+            self.0.resize(dims)
+        }
+        fn kill(&self) -> opsterm_core::error::AppResult<()> {
+            self.0.kill()
+        }
+        fn take_reader(&self) -> opsterm_core::error::AppResult<Box<dyn Read + Send>> {
+            self.0.take_reader()
+        }
+        fn is_alive(&self) -> bool {
+            self.0.is_alive()
+        }
+        fn has_running_command(&self) -> bool {
+            false
+        }
+    }
+
+    fn idle_test_session() -> Session {
+        Session::new(
+            "idle".into(),
+            Box::new(IdleProvider(TestProvider {
+                reader: Mutex::new(Some(Box::new(std::io::empty()))),
+                writes: Arc::new(Mutex::new(Vec::new())),
+                alive: Arc::new(AtomicBool::new(true)),
+            })),
+            80,
+            24,
+            None,
+            Origin::Local,
+        )
+    }
+
+    #[test]
+    fn idle_local_tab_closes_immediately_but_active_remote_still_prompts() {
+        let mut app = test_app();
+        app.sessions.push(idle_test_session());
+        app.request_close_tab(0);
+        assert!(app.sessions.is_empty());
+        assert!(!app.close_confirmation.active());
+        let mut remote = idle_test_session();
+        remote.origin = Origin::Telnet(TelnetSpec {
+            host: "127.0.0.1".into(),
+            port: 23,
+            username: None,
+            term: None,
+            password: None,
+        });
+        app.sessions.push(remote);
+        app.request_close_tab(0);
+        assert_eq!(app.sessions.len(), 1);
         assert!(app.close_confirmation.active());
+    }
+
+    #[test]
+    fn native_close_ignores_idle_dead_and_opening_tabs() {
+        let mut app = test_app();
+        app.sessions.push(idle_test_session());
+        let (mut dead, _) = test_session(std::io::empty());
+        dead.exited = true;
+        app.sessions.push(dead);
+        let (mut opening, _) = test_session(std::io::empty());
+        opening.opening = true;
+        app.sessions.push(opening);
+        app.fonts_ready = true;
+        let output = close_test_frame(&mut app, &egui::Context::default(), vec![], true);
+        assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(!app.close_confirmation.active());
+    }
+
+    #[test]
+    fn immediate_idle_native_close_blocks_background_enter() {
+        let mut app = test_app();
+        let _release = hold_connection_workers(&mut app);
+        app.sessions.push(idle_test_session());
+        app.fonts_ready = true;
+        app.quick = "ops@127.0.0.1:1".into();
+        let ctx = egui::Context::default();
+        close_test_frame(&mut app, &ctx, vec![], false);
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("quick-connect")));
+        close_test_frame(&mut app, &ctx, vec![], false);
+        let output = close_test_frame(
+            &mut app,
+            &ctx,
+            vec![close_test_key(egui::Key::Enter, egui::Modifiers::NONE)],
+            true,
+        );
+        assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(!app.close_confirmation.active());
+        assert!(app.queued_connections.is_empty());
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.quick, "ops@127.0.0.1:1");
+    }
+
+    #[test]
+    fn window_close_counts_only_sessions_at_risk() {
+        let mut app = test_app();
+        app.sessions.push(idle_test_session());
+        let (busy, _) = test_session(std::io::empty());
+        app.sessions.push(busy);
+        assert_eq!(app.risky_session_count(), 1);
+    }
+
+    #[test]
+    fn opening_placeholder_closes_without_confirmation() {
+        let mut app = test_app();
+        let (mut session, _) = test_session(std::io::empty());
+        session.opening = true;
+        app.sessions.push(session);
+        app.request_close_tab(0);
+        assert!(app.sessions.is_empty());
+        assert!(!app.close_confirmation.active());
     }
 
     #[test]

@@ -28,3 +28,7 @@ tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync", "ma
 
 [dev-dependencies]
 tempfile = "3"
+
+# Embed D-Bus to avoid distro-specific libdbus/libsystemd ABI dependencies.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = { version = "0.9", features = ["vendored"] }

@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import socket
+import signal
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,18 @@ def wait_for(predicate, message, seconds=10):
             return result
         time.sleep(.05)
     raise AssertionError(message)
+
+
+def stop(process):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
 
 
 def main():
@@ -37,14 +50,13 @@ def main():
         env.pop('WAYLAND_SOCKET', None)
         process = subprocess.Popen([binary, '--telnet', '127.0.0.1', '--port',
                                    str(server.getsockname()[1]), '--title', 'GNS3 R1 lab'],
-                                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             with server.accept()[0] as console:
                 console.settimeout(.2)
                 console.sendall(b'\r\nGNS3 TELNET ROUNDTRIP READY\r\nRouter# ')
                 def find_window():
-                    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid',
-                                             str(process.pid), '--name', 'GNS3 R1 lab'],
+                    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', 'GNS3 R1 lab'],
                                             capture_output=True, text=True)
                     return result.stdout.splitlines()[0] if result.returncode == 0 else None
                 window = wait_for(find_window, 'Named GNS3 console window did not appear')
@@ -70,11 +82,10 @@ def main():
                     refused.bind(('127.0.0.1', 0))
                     offline = subprocess.Popen([binary, '--telnet', '127.0.0.1', '--port',
                         str(refused.getsockname()[1]), '--title', 'GNS3 Offline'],
-                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     try:
                         def find_offline():
-                            result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid',
-                                str(offline.pid), '--name', 'GNS3 Offline'], capture_output=True, text=True)
+                            result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', 'GNS3 Offline'], capture_output=True, text=True)
                             return result.stdout.splitlines()[0] if result.returncode == 0 else None
                         offline_window = wait_for(find_offline, 'Second GNS3 window did not appear')
                         time.sleep(.7)
@@ -82,28 +93,22 @@ def main():
                         subprocess.run(['import', '-window', offline_window,
                                         str(output / 'connection-refused.png')], check=True)
                     finally:
-                        offline.terminate()
-                        try:
-                            offline.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            offline.kill()
-                            offline.wait()
+                        stop(offline)
                 subprocess.run(['xdotool', 'windowfocus', '--sync', window], check=True)
+                subprocess.run(['xdotool', 'key', 'ctrl+shift+w'], check=True)
+                time.sleep(.25)
+                subprocess.run(['import', '-window', window, str(output / 'active-close-confirm.png')], check=True)
+                subprocess.run(['xdotool', 'key', 'Escape'], check=True)
+                console.sendall(b'\r\nACTIVE SESSION SURVIVED CANCEL\r\nRouter# ')
+                time.sleep(.2)
             time.sleep(.5)
             subprocess.run(['xdotool', 'key', 'ctrl+shift+w'], check=True)
             time.sleep(.25)
-            subprocess.run(['import', '-window', window, str(output / 'close-confirm.png')], check=True)
-            subprocess.run(['xdotool', 'key', 'Escape'], check=True)
-            assert process.poll() is None, 'Disconnected console did not survive cancel'
-            subprocess.run(['import', '-window', window, str(output / 'cancelled.png')], check=True)
-            print('PASS: GNS3 arguments, named window, real Telnet output/input, simultaneous windows and close cancellation (inspect screenshots)')
+            subprocess.run(['import', '-window', window, str(output / 'disconnected-tab-closed.png')], check=True)
+            assert process.poll() is None, 'Closing a disconnected tab unexpectedly quit the app'
+            print('PASS: GNS3 arguments, named window, real Telnet output/input, simultaneous windows, active close cancellation and immediate disconnected close (inspect screenshots)')
         finally:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+            stop(process)
 
 
 if __name__ == '__main__':

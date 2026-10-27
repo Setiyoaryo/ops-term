@@ -13,6 +13,7 @@ const MAX_PENDING_BYTES: usize = 1024 * 1024;
 
 struct Shared {
     alive: AtomicBool,
+    busy: AtomicBool,
     closed: AtomicBool,
     bytes: AtomicUsize,
     error: Mutex<Option<String>>,
@@ -115,6 +116,10 @@ impl ConnectionProvider for Responsive {
     fn is_alive(&self) -> bool {
         self.status.0.alive.load(Ordering::Acquire)
     }
+    fn has_running_command(&self) -> bool {
+        self.status.0.bytes.load(Ordering::Acquire) > 0
+            || self.status.0.busy.load(Ordering::Acquire)
+    }
     fn take_reader(&self) -> AppResult<Box<dyn Read + Send>> {
         self.reader
             .lock()
@@ -142,6 +147,7 @@ pub fn responsive(
     let transport: Arc<dyn ConnectionProvider> = Arc::from(provider);
     let status = Status(Arc::new(Shared {
         alive: AtomicBool::new(true),
+        busy: AtomicBool::new(true),
         closed: AtomicBool::new(false),
         bytes: AtomicUsize::new(0),
         error: Mutex::new(None),
@@ -151,11 +157,16 @@ pub fn responsive(
     let worker = transport.clone();
     let state = status.clone();
     if std::thread::Builder::new().name("opsterm-session-io".into()).spawn(move || {
+        let mut settle_until = std::time::Instant::now();
         while !state.0.closed.load(Ordering::Acquire) {
             let result = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(_) if state.0.closed.load(Ordering::Acquire) => break,
                 Ok(Operation::Write(bytes)) => {
+                    // PTY writes can return before the shell creates its child.
+                    // Keep a short grace interval while the shell consumes input.
+                    state.0.busy.store(true, Ordering::Release);
                     let result = worker.write(&bytes);
+                    settle_until = std::time::Instant::now() + Duration::from_millis(300);
                     state.0.bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
                     result
                 }
@@ -172,6 +183,10 @@ pub fn responsive(
                 break;
             }
             if !worker.is_alive() { break; }
+            let busy = worker.has_running_command() || std::time::Instant::now() < settle_until;
+            if state.0.busy.swap(busy, Ordering::AcqRel) != busy {
+                state.0.wake.request();
+            }
         }
         state.0.closed.store(true, Ordering::Release);
         state.0.alive.store(false, Ordering::Release);
@@ -403,6 +418,68 @@ mod tests {
         assert!(error.contains("Session I/O failed"));
         assert!(!error.contains("sensitive"));
         assert!(provider.write(b"retry").is_err());
+    }
+
+    struct Idle {
+        write_entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl ConnectionProvider for Idle {
+        fn write(&self, _: &[u8]) -> AppResult<()> {
+            self.write_entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            Ok(())
+        }
+        fn resize(&self, _: TerminalDimensions) -> AppResult<()> {
+            Ok(())
+        }
+        fn kill(&self) -> AppResult<()> {
+            Ok(())
+        }
+        fn take_reader(&self) -> AppResult<Box<dyn Read + Send>> {
+            Ok(Box::new(std::io::empty()))
+        }
+        fn is_alive(&self) -> bool {
+            true
+        }
+        fn has_running_command(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn cached_idle_probe_marks_queued_input_busy_until_worker_settles() {
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (provider, _) = responsive(Box::new(Idle {
+            write_entered: entered,
+            release: Mutex::new(wait),
+        }))
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while provider.has_running_command() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        provider.write(b"sleep 30\n").unwrap();
+        assert!(
+            provider.has_running_command(),
+            "queued Enter was treated as idle"
+        );
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let before = std::time::Instant::now();
+        assert!(provider.has_running_command());
+        assert!(before.elapsed() < Duration::from_millis(100));
+        release.send(()).unwrap();
+        // Even a transport that reports idle immediately cannot erase the
+        // shell scheduling grace after accepting a command.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(provider.has_running_command());
+        while provider.has_running_command() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        provider.kill().unwrap();
     }
 
     #[test]

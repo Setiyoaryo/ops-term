@@ -1,5 +1,6 @@
 from contextlib import redirect_stdout
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,7 +21,10 @@ class PublishReleaseTests(unittest.TestCase):
         files = []
         for name in ["opsterm-egui-0.1.1-linux-x86_64", "opsterm-egui-0.1.1-linux-x86_64.sha256", "opsterm-egui-0.1.1-linux-x86_64.sig", "manifest.json"]:
             path = Path(directory) / name
-            path.write_bytes(name.encode())
+            if name == "manifest.json":
+                path.write_text(json.dumps({"version":"0.1.1","assets":{"linux-x86_64":{"url":"https://example.test/opsterm-egui-0.1.1-linux-x86_64"}}}))
+            else:
+                path.write_bytes(name.encode())
             files.append(path)
         return files
 

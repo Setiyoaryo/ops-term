@@ -3,6 +3,7 @@ name: Release egui
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,37 +13,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     if: github.repository == 'Setiyoaryo/ops-term'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    permissions:
-      contents: write
     env:
       CARGO_BUILD_JOBS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Initialize temporary publishing configuration
-        run: printf 'GH_CONFIG_DIR=%s/opsterm-gh\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Install baseline build and GUI test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3-tomli libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl squashfs-tools desktop-file-utils xvfb xdotool imagemagick weston libgl1-mesa-dri
       - name: Validate trusted release tag
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           python3 -c 'import sys; from scripts.package_egui import version, validate_release_tag; validate_release_tag(sys.argv[1], version())' "$GITHUB_REF_NAME"
           git merge-base --is-ancestor HEAD origin/main
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libdbus-1-dev libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
         with:
           toolchain: 1.94.1
           components: rustfmt, clippy
-      - name: Format check
-        run: python3 scripts/build_guard.py -- cargo fmt -p opsterm-core -p opsterm-egui --check
-      - name: Package metadata tests
-        run: python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py
+      - name: Format and packaging tests
+        run: |
+          python3 scripts/build_guard.py -- cargo fmt -p opsterm-core -p opsterm-egui --check
+          python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py scripts/test_linux_distribution.py scripts/test_merge_release.py scripts/test_release_assets.py
       - name: Rust tests
         env:
           XDG_DATA_HOME: ${{ runner.temp }}/opsterm-test-data
@@ -50,39 +57,106 @@ jobs:
         run: python3 scripts/build_guard.py -- cargo test -p opsterm-core -p opsterm-egui --release --locked -- --test-threads=1
       - name: Clippy
         run: python3 scripts/build_guard.py -- cargo clippy -p opsterm-core -p opsterm-egui --release --locked --all-targets -- -D warnings
-      - name: Materialize signing key and scoped publishing credential
+      - name: Build baseline binary and portable formats
+        run: |
+          python3 scripts/build_guard.py -- cargo build -p opsterm-egui --release --locked
+          python3 scripts/build_guard.py -- python3 -c 'import os, shutil; from pathlib import Path; from scripts.package_egui import version; from scripts.linux_distribution import build_distribution; arch=os.uname().machine; out=Path("release"); out.mkdir(exist_ok=True); binary=Path("target/release/opsterm-egui"); build_distribution(binary,version(),arch,out); shutil.copy2(binary,out/f"opsterm-egui-{version()}-linux-{arch}")'
+      - name: Native X11 and Wayland rendering smoke
+        run: |
+          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/release/opsterm-egui "$RUNNER_TEMP/native-x11"
+          python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/release/opsterm-egui
+          image="$(find release -maxdepth 1 -name '*.AppImage' -print -quit)"
+          APPIMAGE_EXTRACT_AND_RUN=1 python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py "$image" "$RUNNER_TEMP/appimage-x11"
+      - name: Materialize signing key
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           umask 077
-          mkdir -p "$GH_CONFIG_DIR"
           cat > "$RUNNER_TEMP/opsterm-signing.key" <<'OPSTERM_SIGNING_KEY_EOF'
           ${{ secrets.OPSTERM_UPDATE_SIGNING_KEY }}
           OPSTERM_SIGNING_KEY_EOF
+          test -s "$RUNNER_TEMP/opsterm-signing.key"
+      - name: Sign verified artifacts
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python3 -m scripts.sign_release --tag "$GITHUB_REF_NAME" --key "$RUNNER_TEMP/opsterm-signing.key"
+      - name: Verify real signed AppImage replacement and rollback
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python3 scripts/build_guard.py -- python3 scripts/smoke-appimage-update.py target/release/opsterm-egui --key "$RUNNER_TEMP/opsterm-signing.key"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: release/
+          retention-days: 2
+          if-no-files-found: error
+      - name: Clean private material and caches
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/opsterm-signing.key"
+          if pgrep -af 'cargo|vite|build_guard'; then exit 1; fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
+          test ! -d target
+
+  compatibility:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04', 'debian:12', 'debian:13', 'fedora:latest', 'archlinux:base', 'cachyos/cachyos:latest']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-x86_64
+          path: artifact
+      - name: Verify portable startup without distro dependency installation
+        env:
+          DISTRO_IMAGE: ${{ matrix.image }}
+        run: python3 scripts/build_guard.py -- python3 scripts/smoke-linux-distribution.py "$DISTRO_IMAGE" artifact
+      - name: Clean test caches
+        if: always()
+        run: |
+          if pgrep -af 'cargo|vite|build_guard'; then exit 1; fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, compatibility]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: linux-*
+          path: artifacts
+      - name: Verify signatures and assemble complete release
+        run: python3 -m scripts.merge_release --input artifacts/linux-x86_64 --input artifacts/linux-aarch64 --output release
+      - name: Initialize temporary publishing configuration
+        run: printf 'GH_CONFIG_DIR=%s/opsterm-gh\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Materialize scoped publishing credential
+        run: |
+          umask 077
+          mkdir -p "$GH_CONFIG_DIR"
           cat > "$GH_CONFIG_DIR/hosts.yml" <<'OPSTERM_GH_AUTH_EOF'
           github.com:
               oauth_token: ${{ github.token }}
               git_protocol: https
           OPSTERM_GH_AUTH_EOF
-          test -s "$RUNNER_TEMP/opsterm-signing.key"
-      - name: Build and sign versioned assets
-        run: |
-          python3 scripts/package_egui.py --tag "$GITHUB_REF_NAME" --key "$RUNNER_TEMP/opsterm-signing.key" --asset-base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" --keep-target
-      - name: Verify signed manifest using the release binary
-        env:
-          OPSTERM_UPDATE_URL: ${{ github.workspace }}/release/manifest.json
-        run: ./target/release/opsterm-egui --check-update
-      - name: Publish complete release
+      - name: Publish immutable complete release
         run: python3 -m scripts.publish_github_release --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
-      - name: Remove private temporary material and build caches
+      - name: Remove publishing credential and caches
         if: always()
-        shell: bash
         run: |
-          rm -f "$RUNNER_TEMP/opsterm-signing.key"
-          rm -rf "$RUNNER_TEMP/opsterm-gh" "$RUNNER_TEMP/opsterm-release-download"
-          if pgrep -af 'cargo|vite|build_guard'; then
-            echo 'Cleanup refused while a build/test process is still active.'
-            exit 1
-          fi
+          rm -rf "$GH_CONFIG_DIR"
+          if pgrep -af 'cargo|vite|build_guard'; then exit 1; fi
           flock -n .opsterm-build.lock bash scripts/clean.sh --dist
-          test ! -d target
-          test ! -d src-tauri/target
