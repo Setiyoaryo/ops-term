@@ -41,6 +41,7 @@ mod quick_connect;
 mod remote_files;
 mod repaint;
 mod session_io;
+mod startup;
 mod terminal_render;
 mod update;
 use connections::Origin;
@@ -2107,6 +2108,23 @@ impl App {
                 }
             }
         }
+    }
+
+    fn open_telnet_console(&mut self, spec: TelnetSpec, title: String) {
+        // An external console has no inventory credentials to unlock. Protected
+        // inventory actions still request the vault through their normal path.
+        self.vault_prompt = false;
+        self.queue_connection(
+            connections::Request {
+                title,
+                origin: Origin::Telnet(spec),
+                saved: None,
+                secret: None,
+                target: None,
+                dims: TerminalDimensions { cols: 80, rows: 24 },
+            },
+            None,
+        );
     }
 
     fn new_local(&mut self) {
@@ -6046,17 +6064,40 @@ fn data_dir() -> std::path::PathBuf {
 fn main() -> eframe::Result<()> {
     #[cfg(target_os = "linux")]
     std::env::set_var("MALLOC_ARENA_MAX", "2");
-    if let Some(code) = update::cli(&std::env::args().skip(1).collect::<Vec<_>>()) {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(code) = update::cli(&args) {
         std::process::exit(code);
     }
+    let launch = match startup::parse(&args) {
+        Ok(startup::Launch::Help) => {
+            print!("{}", startup::HELP);
+            return Ok(());
+        }
+        Ok(startup::Launch::Version) => {
+            println!("OpsTerm v{}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Ok(launch) => launch,
+        Err(error) => {
+            eprintln!("OpsTerm: {error}");
+            std::process::exit(2);
+        }
+    };
+    let window_title = match &launch {
+        startup::Launch::Telnet { title, .. } => format!("{title} — OpsTerm"),
+        _ => "OpsTerm".into(),
+    };
     let db = Database::open(&data_dir().join("opsterm.db")).expect("open database");
     let mut app = App::new(db);
-    app.new_local();
+    match launch {
+        startup::Launch::Telnet { spec, title } => app.open_telnet_console(spec, title),
+        _ => app.new_local(),
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([760.0, 500.0])
-            .with_title("OpsTerm"),
+            .with_title(window_title),
         ..Default::default()
     };
     eframe::run_native(
@@ -6122,6 +6163,29 @@ mod tests {
             Session::new("test".into(), Box::new(p), 80, 24, None, Origin::Local),
             writes,
         )
+    }
+
+    #[test]
+    fn gns3_startup_opens_only_named_telnet_tab_without_inventory_credentials() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut app = test_app();
+        app.vault_prompt = true;
+        app.open_telnet_console(
+            TelnetSpec {
+                host: "127.0.0.1".into(),
+                port,
+                username: None,
+                term: Some("xterm-256color".into()),
+                password: None,
+            },
+            "GNS3 R1".into(),
+        );
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.sessions[0].title, "GNS3 R1");
+        assert!(!app.vault_prompt);
+        assert!(matches!(&app.sessions[0].origin, Origin::Telnet(spec) if spec.port == port));
+        assert_eq!(app.db.list_sessions().unwrap().len(), 0);
     }
 
     #[test]

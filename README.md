@@ -67,6 +67,23 @@ select all · `Ctrl+V` paste · double-click selects a word · mouse wheel or
 `Shift+PageUp`/`Shift+PageDown` scrolls history. In the command editor, `Enter`
 sends and `Shift+Enter` inserts a new line. Scratchpad is available under View.
 
+GNS3 desktop console: in **Edit → Preferences → General → Console applications**,
+edit **Console application command for Telnet** and enter the installed executable's
+absolute path followed by:
+
+```text
+/home/portego/.local/bin/opsterm-egui --telnet "{host}" --port {port} --title "{name}"
+```
+
+Replace `/home/portego` with your home directory on other machines. GNS3 replaces
+these placeholders when you open a node's console. Each launch opens a separate
+OpsTerm window with one named Telnet tab and no extra local shell; it does not
+reuse an existing window or add devices to the saved inventory. The GNS3 server
+address and console port must be reachable from this computer. This uses OpsTerm's
+built-in Telnet transport; no external `telnet` executable is required. VNC console
+settings are separate and continue using your VNC viewer. Without command arguments,
+OpsTerm still opens Local Shell. Use `opsterm-egui --help` for console options.
+
 Clipboard images: with a CLI agent such as Codex in the terminal, `Ctrl+V` or
 `Ctrl+Shift+V` forwards its image-paste shortcut when the clipboard has no text.
 Text paste keeps its existing behavior. The agent reads the clipboard itself;
