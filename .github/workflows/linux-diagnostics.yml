@@ -23,17 +23,24 @@ jobs:
         with:
           toolchain: 1.94.1
       - name: Build diagnostic binary
-        run: python3 scripts/build_guard.py -- cargo build -p opsterm-egui --locked
+        run: python3 scripts/build_guard.py -- cargo build -p opsterm-egui --release --locked
       - name: Capture original graphics startup
         continue-on-error: true
-        run: python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/debug/opsterm-egui "$RUNNER_TEMP/original-graphics"
+        run: python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/original-graphics"
       - name: Complete X11 and EGL software graphics stack
         run: sudo apt-get install -y libxcursor1 libxrandr2 libxi6 libxinerama1 libxkbcommon-x11-0 libegl1 libegl-mesa0 libglx-mesa0 fonts-dejavu-core
       - name: Verify graphics and active-session close behavior
         run: |
-          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/debug/opsterm-egui "$RUNNER_TEMP/complete-graphics"
-          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/debug/opsterm-egui "$RUNNER_TEMP/telnet"
-          python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/debug/opsterm-egui
+          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/complete-graphics"
+          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/release/opsterm-egui "$RUNNER_TEMP/telnet"
+          python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/release/opsterm-egui
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: arm-graphics-diagnostic
+          path: target/release/opsterm-egui
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Clean caches
         if: always()
         run: |
