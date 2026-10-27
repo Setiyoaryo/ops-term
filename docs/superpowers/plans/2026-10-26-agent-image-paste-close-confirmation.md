@@ -12,6 +12,6 @@ Close flow: tab X and Ctrl+Shift+W request confirmation for open sessions, inclu
 - [x] Apply and document the minimal backend patch with upstream licenses; implement terminal key encoding and confirmation state/dialogs.
 - [x] Verify PNG clipboard Ctrl+V delivers exactly one control key, text paste remains exactly once, and real agent accepts an attachment without submitting a prompt.
 - [x] Verify tab X/shortcut, Cancel/Escape, confirm, stable identity, native window close, and update restart protection.
-- [ ] Guarded Rust/frontend checks and real native GUI smoke, independent review, signed release/install and cache cleanup.
+- [x] Guarded Rust/frontend checks and real native GUI smoke, independent review, signed release/install and cache cleanup.
 
-Final source verification and limitations: [report](../../image-paste-close-2026-10-27.md). Signed release/install and final cleanup remain until publication.
+Final source verification and limitations: [report](../../image-paste-close-2026-10-27.md). Signed v0.1.3 was published and installed through the trusted updater; release-binary native clipboard/close tests passed. Final caches were cleaned after use.

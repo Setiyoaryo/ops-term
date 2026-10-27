@@ -38,3 +38,13 @@ The clipboard fixture initially inherited the desktop's Wayland GTK backend duri
 Image input depends on the agent supporting its image-paste key and accessing the same clipboard. There is no local-to-remote image transfer over SSH. Dual-format clipboards retain native text priority. Wayland uses the shared keyboard fallback and existing clipboard backend; the automated native desktop tests were run under X11/Xvfb. The isolated OpsTerm tests use temporary databases; existing inventory, vault and user windows were preserved.
 
 CI browser setup now matches the proven Pages setup: install the Playwright headless browser using hosted Ubuntu runtime libraries rather than re-downloading unrelated system fonts through a slow apt mirror. Browser checks remain enabled.
+
+## Published and installed
+
+The signed [v0.1.3 release](https://github.com/Setiyoaryo/ops-term/releases/tag/v0.1.3) is public. [CI](https://github.com/Setiyoaryo/ops-term/actions/runs/40424276087), [release verification](https://github.com/Setiyoaryo/ops-term/actions/runs/40423407488), and [automatic Pages refresh](https://github.com/Setiyoaryo/ops-term/actions/runs/40425092554) succeeded.
+
+The previously trusted updater installed the public v0.1.3 asset after signature/hash verification. The new executable reported `OpsTerm v0.1.3 is up to date`. Its independently checked SHA-256 matches the public manifest:
+
+`ba196ac796e7255fae615cfc6607a39a56a364c616d18e7796d3a69ffc35fc72`
+
+Both native PNG/text clipboard and tab/native-window confirmation GUI smokes passed again against the installed release binary. The public website download points to v0.1.3. Existing user windows were preserved and require a user-controlled relaunch from the installed launcher to load the update. Generated workspace caches were removed after verification.
