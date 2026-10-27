@@ -1,5 +1,7 @@
 # Feature Status
 
+27 Oktober 2026 — v0.1.5: kompatibilitas keyboard terminal (DECCKM/ncdu, F1–F12, modifier, bracketed paste, IME), mouse reporting/scroll opencode, truecolor + OSC/DA/DSR untuk tema Codex/opencode, dan render reverse-video. 117 test egui + 55 test core lulus. [Catatan rilis](docs/releases/v0.1.5.md).
+
 27 Oktober 2026 — v0.1.4: command console Telnet GNS3 membuka satu jendela dengan nama node, tanpa local shell tambahan. Host/port/title divalidasi; roundtrip Telnet, dua jendela bersamaan, koneksi gagal dan konfirmasi close diuji. [Bukti pengujian](docs/gns3-console-2026-10-27.md).
 
 27 Oktober 2026 — v0.1.3: paste clipboard gambar ke CLI agent dan konfirmasi X tab/aplikasi/restart. PNG diuji pada clipboard asli dan composer Codex. [Bukti pengujian](docs/image-paste-close-2026-10-27.md).

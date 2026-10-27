@@ -11,11 +11,11 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::EventListener;
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::{Config as TermConfig, Term};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
+use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor, Rgb};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, Pos2, Rect, Stroke, Vec2,
 };
@@ -187,9 +187,25 @@ fn ok() -> Color32 {
     theme().ok
 }
 
+/// Terminal feedback that must be routed back to the PTY (device attributes,
+/// cursor reports, color queries, window-size queries) or to the host UI
+/// (title, clipboard, bell). Dropping these events is what makes TUIs such as
+/// Codex/opencode fall back to the terminal palette.
 #[derive(Clone)]
-struct Listener;
-impl EventListener for Listener {}
+struct Listener {
+    events: Arc<Mutex<Vec<Event>>>,
+}
+
+impl EventListener for Listener {
+    fn send_event(&self, event: Event) {
+        if let Ok(mut queue) = self.events.lock() {
+            // Bound the queue: unsupported requests must never grow memory.
+            if queue.len() < 512 {
+                queue.push(event);
+            }
+        }
+    }
+}
 
 struct Size {
     cols: usize,
@@ -243,6 +259,11 @@ struct Session {
     selecting: bool,
     sel_scroll_at: Option<Instant>,
     scroll_pixels: f32,
+    cell_width: f32,
+    cell_height: f32,
+    reported_focus: bool,
+    mouse_cell: Option<(usize, i32)>,
+    events: Arc<Mutex<Vec<Event>>>,
     opening: bool,
     connection_error: Option<String>,
     wake: repaint::Wake,
@@ -290,13 +311,16 @@ impl Session {
             notify.request();
         });
         let provider: Arc<dyn ConnectionProvider> = Arc::from(provider);
+        let events = Arc::new(Mutex::new(Vec::new()));
         let term = Term::new(
             TermConfig {
                 scrolling_history: SCROLLBACK_LINES,
                 ..Default::default()
             },
             &Size { cols, rows },
-            Listener,
+            Listener {
+                events: events.clone(),
+            },
         );
         Session {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
@@ -323,6 +347,11 @@ impl Session {
             selecting: false,
             sel_scroll_at: None,
             scroll_pixels: 0.0,
+            cell_width: 8.0,
+            cell_height: 17.0,
+            reported_focus: false,
+            mouse_cell: None,
+            events,
             opening: false,
             connection_error: None,
             wake,
@@ -542,10 +571,24 @@ impl Session {
 
     fn key_bytes(&self, key: egui::Key, modifiers: egui::Modifiers) -> Option<Vec<u8>> {
         if key == egui::Key::Backspace {
-            Some(vec![self.backspace])
-        } else {
-            key_to_bytes(key, modifiers)
+            if modifiers.ctrl || modifiers.command {
+                return Some(vec![0x08]);
+            }
+            let mut out = Vec::with_capacity(2);
+            if modifiers.alt {
+                out.push(0x1b);
+            }
+            out.push(self.backspace);
+            return Some(out);
         }
+        key_to_bytes(key, modifiers, *self.term.mode())
+    }
+
+    fn drain_events(&self) -> Vec<Event> {
+        self.events
+            .lock()
+            .map(|mut queue| std::mem::take(&mut *queue))
+            .unwrap_or_default()
     }
 }
 
@@ -2494,6 +2537,8 @@ impl App {
         let rows = ((avail.y / cell_h).floor() as usize).clamp(1, 200);
 
         self.sessions[active].resize(cols, rows);
+        self.sessions[active].cell_width = cell_w;
+        self.sessions[active].cell_height = cell_h;
 
         let origin = ui.min_rect().min;
         let grid = Rect::from_min_size(
@@ -2522,15 +2567,20 @@ impl App {
             });
         }
 
-        if resp.hovered() {
-            let ratio = self.terminal_scroll_speed / self.scroll_speed.max(1.0);
-            let pixels = ctx.input_mut(|i| {
-                let delta = i.smooth_scroll_delta.y;
-                i.smooth_scroll_delta.y = 0.0;
-                delta
-            }) * ratio;
-            self.sessions[active].scroll_by_pixels(pixels, cell_h);
+        // DECSET 1004 focus reporting, expected by vim/neovim, tmux and
+        // shell-integration scripts.
+        let focused = resp.has_focus();
+        let wants_focus = self.sessions[active]
+            .term
+            .mode()
+            .contains(TermMode::FOCUS_IN_OUT);
+        let previous_focus = self.sessions[active].reported_focus;
+        if wants_focus && focused != previous_focus {
+            let sequence: &[u8] = if focused { b"\x1b[I" } else { b"\x1b[O" };
+            let _ = self.sessions[active].write(sequence);
         }
+        self.sessions[active].reported_focus = focused;
+
         let scroll_pixels = self.sessions[active].scroll_pixels;
         let mut display_offset = self.sessions[active]
             .term
@@ -2550,23 +2600,90 @@ impl App {
         let pointer = ctx.input(|i| i.pointer.clone());
         let pointer_pos = pointer.interact_pos();
         let shift_held = ctx.input(|i| i.modifiers.shift);
+        let mode = *self.sessions[active].term.mode();
+        let mouse_mode = mode.intersects(TermMode::MOUSE_MODE);
+        // Shift is the standard escape hatch: it selects locally even while a
+        // full-screen application has mouse reporting enabled.
+        let report_mouse = mouse_mode && !shift_held;
+        let sgr_mouse = mode.contains(TermMode::SGR_MOUSE);
+
+        if resp.hovered() {
+            let ratio = self.terminal_scroll_speed / self.scroll_speed.max(1.0);
+            let delta = ctx.input_mut(|i| {
+                let value = i.smooth_scroll_delta.y;
+                i.smooth_scroll_delta.y = 0.0;
+                value
+            });
+            if report_mouse && delta != 0.0 {
+                if let Some(pos) = pointer_pos.filter(|pos| grid.contains(*pos)) {
+                    let (column, row) = cell_of(pos);
+                    let button = if delta > 0.0 { 64 } else { 65 };
+                    let steps = ((delta.abs() / 40.0).ceil() as usize).clamp(1, 3);
+                    let sequence = mouse_sequence(button, column, row, false, sgr_mouse, &ctx);
+                    for _ in 0..steps {
+                        let _ = self.sessions[active].write(&sequence);
+                    }
+                }
+            } else if delta != 0.0
+                && mode.contains(TermMode::ALT_SCREEN)
+                && mode.contains(TermMode::ALTERNATE_SCROLL)
+            {
+                // Alternate-scroll: full-screen TUIs without mouse reporting
+                // (ncdu, htop, less inside tmux) expect wheel as arrow keys.
+                let key = if delta > 0.0 {
+                    egui::Key::ArrowUp
+                } else {
+                    egui::Key::ArrowDown
+                };
+                let steps = ((delta.abs() / 40.0).ceil() as usize).clamp(1, 3);
+                if let Some(sequence) = self.sessions[active].key_bytes(key, egui::Modifiers::NONE)
+                {
+                    for _ in 0..steps {
+                        let _ = self.sessions[active].write(&sequence);
+                    }
+                }
+            } else {
+                self.sessions[active].scroll_by_pixels(delta * ratio, cell_h);
+            }
+        }
         if let Some(pos) = pointer_pos {
             if pointer.primary_pressed() && grid.contains(pos) {
                 resp.request_focus();
                 self.active = active;
-                let session = &mut self.sessions[active];
-                let cell = cell_at(pos, display_offset);
-                if shift_held && session.sel_anchor.is_some() {
-                    session.sel_head = Some(cell);
-                    session.sel_mode = SelMode::Char;
-                    session.selecting = true;
+                if report_mouse {
+                    let (column, row) = cell_of(pos);
+                    let sequence = mouse_sequence(0, column, row, false, sgr_mouse, &ctx);
+                    let _ = self.sessions[active].write(&sequence);
                 } else {
-                    session.sel_anchor = Some(cell);
-                    session.sel_head = Some(cell);
-                    session.sel_mode = SelMode::Char;
-                    session.selecting = true;
+                    let session = &mut self.sessions[active];
+                    let cell = cell_at(pos, display_offset);
+                    if shift_held && session.sel_anchor.is_some() {
+                        session.sel_head = Some(cell);
+                        session.sel_mode = SelMode::Char;
+                        session.selecting = true;
+                    } else {
+                        session.sel_anchor = Some(cell);
+                        session.sel_head = Some(cell);
+                        session.sel_mode = SelMode::Char;
+                        session.selecting = true;
+                    }
+                    session.sel_scroll_at = None;
                 }
-                session.sel_scroll_at = None;
+            }
+            if report_mouse
+                && grid.contains(pos)
+                && (mode.contains(TermMode::MOUSE_MOTION)
+                    || (mode.contains(TermMode::MOUSE_DRAG) && pointer.primary_down()))
+            {
+                let (column, row) = cell_of(pos);
+                if self.sessions[active].mouse_cell != Some((column, row)) {
+                    self.sessions[active].mouse_cell = Some((column, row));
+                    let button = if pointer.primary_down() { 32 } else { 32 + 3 };
+                    let sequence = mouse_sequence(button, column, row, false, sgr_mouse, &ctx);
+                    let _ = self.sessions[active].write(&sequence);
+                }
+            } else if !grid.contains(pos) {
+                self.sessions[active].mouse_cell = None;
             }
             if self.sessions[active].selecting {
                 let top = origin.y;
@@ -2592,7 +2709,11 @@ impl App {
                 session.sel_head = Some(cell_at(pos, display_offset));
             }
             if pointer.primary_released() {
-                if self.sessions[active].selecting {
+                if report_mouse {
+                    let (column, row) = cell_of(pos);
+                    let sequence = mouse_sequence(0, column, row, true, sgr_mouse, &ctx);
+                    let _ = self.sessions[active].write(&sequence);
+                } else if self.sessions[active].selecting {
                     let session = &mut self.sessions[active];
                     session.selecting = false;
                     session.sel_scroll_at = None;
@@ -2600,7 +2721,7 @@ impl App {
                         session.clear_selection();
                     }
                 }
-                if self.ui_settings.copy_on_select {
+                if !report_mouse && self.ui_settings.copy_on_select {
                     let text = self.sessions[active].selection_text();
                     self.copy_to_clipboard(&ctx, text);
                 }
@@ -2723,11 +2844,41 @@ impl App {
                     match event {
                         egui::Event::Text(t) => {
                             if !(i.modifiers.ctrl || i.modifiers.command) {
+                                // Alt+<printable> is the readline word-motion
+                                // family (Alt+B/F/D...), i.e. ESC-prefixed.
+                                if i.modifiers.alt && !i.modifiers.ctrl {
+                                    out.push(0x1b);
+                                }
                                 out.extend_from_slice(t.as_bytes());
                             }
                         }
                         egui::Event::Paste(t) => {
-                            out.extend_from_slice(command_input::normalize(t).as_bytes())
+                            // On Linux, plain Ctrl+V must reach the application
+                            // as 0x16 (vim visual-block, readline quoted-insert).
+                            // Paste is Ctrl+Shift+V / Shift+Insert, as in Tabby.
+                            if cfg!(target_os = "linux")
+                                && i.modifiers.ctrl
+                                && !i.modifiers.shift
+                                && !i.modifiers.alt
+                            {
+                                out.push(0x16);
+                            } else {
+                                out.extend_from_slice(&paste_bytes(
+                                    self.sessions[active].term.mode(),
+                                    t.clone(),
+                                ));
+                            }
+                        }
+                        egui::Event::Cut => {
+                            // egui-winit turns Ctrl+X into Cut on Linux, but a
+                            // terminal must deliver 0x18 (vim decrement, emacs
+                            // prefix). Selection cutting is not a terminal verb.
+                            out.push(0x18);
+                        }
+                        egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                            if !(i.modifiers.ctrl || i.modifiers.command) {
+                                out.extend_from_slice(text.as_bytes());
+                            }
                         }
                         egui::Event::Copy => {
                             // winit emits Copy instead of a C press. A following
@@ -2766,8 +2917,12 @@ impl App {
                                     out.push(0x03);
                                     interrupted = true;
                                 }
-                            } else if (modifiers.ctrl || modifiers.command) && *key == egui::Key::A
+                            } else if (modifiers.ctrl || modifiers.command)
+                                && modifiers.shift
+                                && *key == egui::Key::A
                             {
+                                // Tabby/xterm convention: Ctrl+Shift+A selects,
+                                // leaving Ctrl+A (0x01) to readline/vim.
                                 select_all = true;
                             } else if modifiers.shift
                                 && matches!(key, egui::Key::PageUp | egui::Key::PageDown)
@@ -2779,6 +2934,17 @@ impl App {
                                 };
                                 self.sessions[active].term.scroll_display(scroll);
                                 self.sessions[active].scroll_pixels = 0.0;
+                            } else if modifiers.shift && *key == egui::Key::Insert {
+                                if let Some(text) = clipboard_text() {
+                                    out.extend_from_slice(&paste_bytes(
+                                        self.sessions[active].term.mode(),
+                                        text,
+                                    ));
+                                }
+                            } else if (modifiers.ctrl || modifiers.command)
+                                && *key == egui::Key::Insert
+                            {
+                                copy = true;
                             } else if let Some(bytes) =
                                 self.sessions[active].key_bytes(*key, *modifiers)
                             {
@@ -3464,6 +3630,64 @@ impl App {
         }
     }
 
+    /// Drain terminal replies (DA/DSR, OSC 10/11, window size) and route them
+    /// back to the PTY. These are not cosmetic: Codex/opencode use OSC 10/11 to
+    /// learn the real background/foreground, and many TUIs wait for DA/DSR.
+    fn handle_session_events(&mut self, ctx: &egui::Context) {
+        if self.sessions.is_empty() {
+            return;
+        }
+        let colors = self.ui_settings.terminal_appearance.colors(bg(), text_c());
+        let mut bell = false;
+        for index in 0..self.sessions.len() {
+            let events = self.sessions[index].drain_events();
+            if events.is_empty() {
+                continue;
+            }
+            let (cols, rows) = (self.sessions[index].cols, self.sessions[index].rows);
+            let (cell_width, cell_height) = (
+                self.sessions[index].cell_width.max(1.0) as u16,
+                self.sessions[index].cell_height.max(1.0) as u16,
+            );
+            for event in events {
+                match event {
+                    Event::PtyWrite(text) => {
+                        let _ = self.sessions[index].write(text.as_bytes());
+                    }
+                    Event::ColorRequest(color_index, format) => {
+                        let rgb = terminal_query_color(&colors, color_index);
+                        let reply = format(rgb);
+                        let _ = self.sessions[index].write(reply.as_bytes());
+                    }
+                    Event::TextAreaSizeRequest(format) => {
+                        let reply = format(WindowSize {
+                            num_lines: rows as u16,
+                            num_cols: cols as u16,
+                            cell_width,
+                            cell_height,
+                        });
+                        let _ = self.sessions[index].write(reply.as_bytes());
+                    }
+                    Event::ClipboardStore(_, text) => {
+                        if !text.is_empty() && text.len() <= 4 * 1024 * 1024 {
+                            ctx.copy_text(text);
+                            self.toast =
+                                Some(("Copied from terminal to clipboard".into(), Instant::now()));
+                        }
+                    }
+                    Event::Bell => bell = true,
+                    // OSC 52 reads need a clipboard backend that can read the
+                    // system clipboard; unsupported reads are ignored safely.
+                    Event::ClipboardLoad(_, _) => {}
+                    _ => {}
+                }
+            }
+        }
+        if bell {
+            self.last_bell = Some(Instant::now());
+        }
+    }
+
     fn start_runner(&mut self, script: &str) {
         if let Some(target) = self.sessions.get(self.active).map(|s| s.id) {
             self.start_runner_for(target, script);
@@ -3787,43 +4011,272 @@ fn pager_command(ov: &Option<serde_json::Value>) -> Option<String> {
     }
 }
 
-fn key_to_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
+fn clipboard_text() -> Option<String> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    clipboard.get_text().ok()
+}
+
+/// Convert clipboard text into terminal paste bytes, respecting bracketed
+/// paste so shells can distinguish a paste from typed input.
+fn paste_bytes(mode: &TermMode, text: String) -> Vec<u8> {
+    if mode.contains(TermMode::BRACKETED_PASTE) {
+        let mut out = Vec::with_capacity(text.len() + 12);
+        out.extend_from_slice(b"\x1b[200~");
+        out.extend_from_slice(text.replace("\r\n", "\n").as_bytes());
+        out.extend_from_slice(b"\x1b[201~");
+        out
+    } else {
+        command_input::normalize(&text).into_bytes()
+    }
+}
+
+/// Encode an xterm mouse report (SGR 1006 or legacy X10 encoding).
+fn mouse_sequence(
+    button: u8,
+    column: usize,
+    row: i32,
+    release: bool,
+    sgr: bool,
+    ctx: &egui::Context,
+) -> Vec<u8> {
+    let modifiers = ctx.input(|i| i.modifiers);
+    let mut code = button
+        + u8::from(modifiers.shift) * 4
+        + u8::from(modifiers.alt) * 8
+        + u8::from(modifiers.ctrl || modifiers.command) * 16;
+    let x = column + 1;
+    let y = (row + 1).max(1) as usize;
+    if sgr {
+        if release {
+            format!("\x1b[<{code};{x};{y}m").into_bytes()
+        } else {
+            format!("\x1b[<{code};{x};{y}M").into_bytes()
+        }
+    } else {
+        if release {
+            code = 3;
+        }
+        let mut out = vec![0x1b, b'[', b'M'];
+        out.push(32 + code);
+        out.push((32 + x).min(255) as u8);
+        out.push((32 + y).min(255) as u8);
+        out
+    }
+}
+
+/// Map an OSC 10/11/4 color index to the actual palette in use.
+fn terminal_query_color(colors: &appearance::Colors, index: usize) -> Rgb {
+    let color = match index {
+        0..=255 => colors.resolve(AnsiColor::Indexed(index as u8), false),
+        256 => colors.resolve(AnsiColor::Named(NamedColor::Foreground), false),
+        257 => colors.resolve(AnsiColor::Named(NamedColor::Background), true),
+        258 => colors.resolve(AnsiColor::Named(NamedColor::Cursor), false),
+        _ => colors.foreground,
+    };
+    Rgb {
+        r: color.r(),
+        g: color.g(),
+        b: color.b(),
+    }
+}
+
+/// xterm modifier parameter: 1 + Shift(1) + Alt(2) + Ctrl(4).
+fn modifier_code(mods: egui::Modifiers) -> u8 {
+    let mut code = 1;
+    if mods.shift {
+        code += 1;
+    }
+    if mods.alt {
+        code += 2;
+    }
+    if mods.ctrl || mods.command {
+        code += 4;
+    }
+    code
+}
+
+/// Cursor/Home/End style final-byte sequences. DECCKM (`?1h`, used by ncurses
+/// applications such as ncdu, htop and `less`) switches the no-modifier form
+/// from CSI to SS3. Sending CSI while the application expects SS3 is why arrow
+/// keys appeared to do nothing or jump unpredictably.
+fn cursor_key(final_byte: char, application: bool, mods: egui::Modifiers) -> Vec<u8> {
+    let code = modifier_code(mods);
+    if code == 1 {
+        let introducer = if application { b'O' } else { b'[' };
+        vec![0x1b, introducer, final_byte as u8]
+    } else {
+        format!("\x1b[1;{code}{final_byte}").into_bytes()
+    }
+}
+
+fn tilde_key(number: u16, mods: egui::Modifiers) -> Vec<u8> {
+    let code = modifier_code(mods);
+    if code == 1 {
+        format!("\x1b[{number}~").into_bytes()
+    } else {
+        format!("\x1b[{number};{code}~").into_bytes()
+    }
+}
+
+fn function_key(number: u8, mods: egui::Modifiers) -> Option<Vec<u8>> {
+    let code = modifier_code(mods);
+    match number {
+        1..=4 => {
+            let final_byte = (b'P' + (number - 1)) as char;
+            Some(if code == 1 {
+                vec![0x1b, b'O', final_byte as u8]
+            } else {
+                format!("\x1b[1;{code}{final_byte}").into_bytes()
+            })
+        }
+        5..=24 => {
+            let number = match number {
+                5 => 15,
+                6 => 17,
+                7 => 18,
+                8 => 19,
+                9 => 20,
+                10 => 21,
+                11 => 23,
+                12 => 24,
+                13 => 25,
+                14 => 26,
+                15 => 28,
+                16 => 29,
+                17 => 31,
+                18 => 32,
+                19 => 33,
+                20 => 34,
+                21 => 42,
+                22 => 43,
+                23 => 44,
+                _ => 45,
+            };
+            Some(tilde_key(number, mods))
+        }
+        _ => None,
+    }
+}
+
+fn ctrl_letter(key: egui::Key) -> Option<u8> {
+    use egui::Key::*;
+    Some(match key {
+        A => 0x01,
+        B => 0x02,
+        C => 0x03,
+        D => 0x04,
+        E => 0x05,
+        F => 0x06,
+        G => 0x07,
+        H => 0x08,
+        I => 0x09,
+        J => 0x0a,
+        K => 0x0b,
+        L => 0x0c,
+        M => 0x0d,
+        N => 0x0e,
+        O => 0x0f,
+        P => 0x10,
+        Q => 0x11,
+        R => 0x12,
+        S => 0x13,
+        T => 0x14,
+        U => 0x15,
+        V => 0x16,
+        W => 0x17,
+        X => 0x18,
+        Y => 0x19,
+        Z => 0x1a,
+        _ => return None,
+    })
+}
+
+fn key_to_bytes(key: egui::Key, mods: egui::Modifiers, mode: TermMode) -> Option<Vec<u8>> {
     use egui::Key::*;
     let ctrl = mods.ctrl || mods.command;
+    let app_cursor = mode.contains(TermMode::APP_CURSOR);
+
+    if ctrl {
+        if let Some(byte) = ctrl_letter(key) {
+            let mut out = Vec::with_capacity(2);
+            if mods.alt {
+                out.push(0x1b);
+            }
+            out.push(byte);
+            return Some(out);
+        }
+    }
+
+    // Tabby/xterm 5 compatibility: desktop shells bind Alt+Left/Right only in
+    // the Ctrl+Arrow word-jump form, so keep those sequences on Linux.
+    #[cfg(target_os = "linux")]
+    if mods.alt && !ctrl && !mods.shift {
+        match key {
+            ArrowLeft => return Some(b"\x1b[1;5D".to_vec()),
+            ArrowRight => return Some(b"\x1b[1;5C".to_vec()),
+            _ => {}
+        }
+    }
+
     Some(match key {
-        Enter => vec![b'\r'],
+        Enter => {
+            if mods.alt {
+                b"\x1b\r".to_vec()
+            } else {
+                vec![b'\r']
+            }
+        }
         Backspace => vec![0x7f],
         Tab => {
             if mods.shift {
                 b"\x1b[Z".to_vec()
+            } else if mods.alt {
+                b"\x1b\t".to_vec()
             } else {
                 vec![b'\t']
             }
         }
         Escape => vec![0x1b],
-        ArrowUp => b"\x1b[A".to_vec(),
-        ArrowDown => b"\x1b[B".to_vec(),
-        ArrowRight => b"\x1b[C".to_vec(),
-        ArrowLeft => b"\x1b[D".to_vec(),
-        Home => b"\x1b[H".to_vec(),
-        End => b"\x1b[F".to_vec(),
-        Delete => b"\x1b[3~".to_vec(),
-        PageUp => b"\x1b[5~".to_vec(),
-        PageDown => b"\x1b[6~".to_vec(),
-        A if ctrl => vec![0x01],
-        C if ctrl => vec![0x03],
-        V if ctrl => vec![0x16],
-        D if ctrl => vec![0x04],
-        E if ctrl => vec![0x05],
-        F if ctrl => vec![0x06],
-        K if ctrl => vec![0x0b],
-        L if ctrl => vec![0x0c],
-        N if ctrl => vec![0x0e],
-        P if ctrl => vec![0x10],
-        R if ctrl => vec![0x12],
-        U if ctrl => vec![0x15],
-        W if ctrl => vec![0x17],
-        Z if ctrl => vec![0x1a],
+        Space if ctrl => vec![0x00],
+        ArrowUp => cursor_key('A', app_cursor, mods),
+        ArrowDown => cursor_key('B', app_cursor, mods),
+        ArrowRight => cursor_key('C', app_cursor, mods),
+        ArrowLeft => cursor_key('D', app_cursor, mods),
+        Home => cursor_key('H', app_cursor, mods),
+        End => cursor_key('F', app_cursor, mods),
+        Insert => tilde_key(2, mods),
+        Delete => tilde_key(3, mods),
+        PageUp => tilde_key(5, mods),
+        PageDown => tilde_key(6, mods),
+        F1 => function_key(1, mods)?,
+        F2 => function_key(2, mods)?,
+        F3 => function_key(3, mods)?,
+        F4 => function_key(4, mods)?,
+        F5 => function_key(5, mods)?,
+        F6 => function_key(6, mods)?,
+        F7 => function_key(7, mods)?,
+        F8 => function_key(8, mods)?,
+        F9 => function_key(9, mods)?,
+        F10 => function_key(10, mods)?,
+        F11 => function_key(11, mods)?,
+        F12 => function_key(12, mods)?,
+        F13 => function_key(13, mods)?,
+        F14 => function_key(14, mods)?,
+        F15 => function_key(15, mods)?,
+        F16 => function_key(16, mods)?,
+        F17 => function_key(17, mods)?,
+        F18 => function_key(18, mods)?,
+        F19 => function_key(19, mods)?,
+        F20 => function_key(20, mods)?,
+        F21 => function_key(21, mods)?,
+        F22 => function_key(22, mods)?,
+        F23 => function_key(23, mods)?,
+        F24 => function_key(24, mods)?,
+        Backslash if ctrl => vec![0x1c],
+        CloseBracket if ctrl => vec![0x1d],
+        // Ctrl+^ / Ctrl+_ share physical keys with 6 / - on many layouts.
+        Num6 if ctrl => vec![0x1e],
+        Minus if ctrl => vec![0x1f],
         _ => return None,
     })
 }
@@ -4025,6 +4478,7 @@ impl App {
         }
         self.poll_connections();
         self.pump_sessions();
+        self.handle_session_events(&ctx);
         ctx.request_repaint_after(Duration::from_secs(1));
         if self.auto_reconnect {
             for i in 0..self.sessions.len() {
@@ -6823,12 +7277,116 @@ mod tests {
                 physical_key: None,
                 pressed: true,
                 repeat: false,
-                modifiers: egui::Modifiers::CTRL,
+                modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
             }]),
             |ui| app.show(ui),
         );
         assert_eq!(app.sessions[0].selection().unwrap().0.line.0, -2);
         assert!(app.sessions[0].selection_text().contains(preceding.trim()));
+    }
+
+    #[test]
+    fn mouse_wheel_is_reported_to_apps_that_enable_mouse_tracking() {
+        let mut app = test_app();
+        let (mut session, writes) = test_session(std::io::empty());
+        // Same modes opencode/opentui enables at startup.
+        session.processor.advance(
+            &mut session.term,
+            b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h",
+        );
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 500.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input(vec![]), |ui| app.show(ui));
+        let _ = ctx.run_ui(input(vec![]), |ui| app.show(ui));
+        let pos = Pos2::new(450.0, 250.0);
+        let _ = ctx.run_ui(
+            input(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]),
+            |ui| app.show(ui),
+        );
+        let written = writes.lock().unwrap().clone();
+        assert!(
+            written.windows(5).any(|w| w == b"\x1b[<64"),
+            "expected an SGR wheel-up report, got {:?}",
+            String::from_utf8_lossy(&written)
+        );
+    }
+
+    #[test]
+    fn plain_ctrl_a_and_ctrl_v_stay_with_the_terminal() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        let input = |events, modifiers| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 500.0))),
+            events,
+            modifiers,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input(vec![], egui::Modifiers::NONE), |ui| app.show(ui));
+        let pos = Pos2::new(450.0, 250.0);
+        for pressed in [true, false] {
+            let _ = ctx.run_ui(
+                input(
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    egui::Modifiers::NONE,
+                ),
+                |ui| app.show(ui),
+            );
+        }
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        };
+        let _ = ctx.run_ui(
+            input(vec![key(egui::Key::A)], egui::Modifiers::CTRL),
+            |ui| app.show(ui),
+        );
+        assert_eq!(&*writes.lock().unwrap(), &[0x01]);
+        writes.lock().unwrap().clear();
+        let _ = ctx.run_ui(
+            input(
+                vec![egui::Event::Paste("echo hi".into())],
+                egui::Modifiers::CTRL,
+            ),
+            |ui| app.show(ui),
+        );
+        assert_eq!(&*writes.lock().unwrap(), &[0x16]);
+        writes.lock().unwrap().clear();
+        let _ = ctx.run_ui(
+            input(
+                vec![egui::Event::Paste("echo hi".into())],
+                egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            ),
+            |ui| app.show(ui),
+        );
+        assert_eq!(&*writes.lock().unwrap(), b"echo hi");
     }
 
     #[test]
@@ -7574,9 +8132,82 @@ mod tests {
     #[test]
     fn regression_agent_image_paste_key_reaches_the_terminal() {
         assert_eq!(
-            key_to_bytes(egui::Key::V, egui::Modifiers::CTRL),
+            key_to_bytes(egui::Key::V, egui::Modifiers::CTRL, TermMode::default()),
             Some(vec![0x16])
         );
+    }
+
+    #[test]
+    fn arrows_follow_application_cursor_mode() {
+        let (mut session, _) = test_session(std::io::empty());
+        assert_eq!(
+            session.key_bytes(egui::Key::ArrowUp, egui::Modifiers::NONE),
+            Some(b"\x1b[A".to_vec())
+        );
+        // ncurses/ncdu send DECSET ?1h, after which arrows must be SS3.
+        session
+            .processor
+            .advance(&mut session.term, b"\x1b[?1h\x1b[?1049h");
+        assert!(session.term.mode().contains(TermMode::APP_CURSOR));
+        assert_eq!(
+            session.key_bytes(egui::Key::ArrowUp, egui::Modifiers::NONE),
+            Some(b"\x1bOA".to_vec())
+        );
+        assert_eq!(
+            session.key_bytes(egui::Key::ArrowDown, egui::Modifiers::NONE),
+            Some(b"\x1bOB".to_vec())
+        );
+        session.processor.advance(&mut session.term, b"\x1b[?1l");
+        assert_eq!(
+            session.key_bytes(egui::Key::ArrowDown, egui::Modifiers::NONE),
+            Some(b"\x1b[B".to_vec())
+        );
+    }
+
+    #[test]
+    fn modified_and_function_keys_use_xterm_sequences() {
+        let mode = TermMode::default();
+        assert_eq!(
+            key_to_bytes(egui::Key::ArrowLeft, egui::Modifiers::CTRL, mode),
+            Some(b"\x1b[1;5D".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::ArrowUp, egui::Modifiers::ALT, mode),
+            Some(b"\x1b[1;3A".to_vec())
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            key_to_bytes(egui::Key::ArrowRight, egui::Modifiers::ALT, mode),
+            Some(b"\x1b[1;5C".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::F1, egui::Modifiers::NONE, mode),
+            Some(b"\x1bOP".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::F5, egui::Modifiers::NONE, mode),
+            Some(b"\x1b[15~".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::Delete, egui::Modifiers::SHIFT, mode),
+            Some(b"\x1b[3;2~".to_vec())
+        );
+    }
+
+    #[test]
+    fn device_attribute_queries_are_routed_back_to_the_pty() {
+        let (session, writes) = test_session(std::io::empty());
+        let mut app = test_app();
+        app.sessions.push(session);
+        let ctx = egui::Context::default();
+        let session = &mut app.sessions[0];
+        session
+            .processor
+            .advance(&mut session.term, b"\x1b[c\x1b[5n");
+        app.handle_session_events(&ctx);
+        let written = writes.lock().unwrap().clone();
+        assert!(written.starts_with(b"\x1b[?6c"));
+        assert!(written.ends_with(b"\x1b[0n"));
     }
 
     #[test]

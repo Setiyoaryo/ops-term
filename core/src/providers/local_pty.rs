@@ -17,6 +17,14 @@ pub fn spawn_local_shell(dims: TerminalDimensions) -> AppResult<Box<dyn Connecti
     // terminal emulator.
     cmd.arg("-l");
     cmd.env("TERM", "xterm-256color");
+    // Advertise the colour capability and terminal identity. Without
+    // COLORTERM=truecolor, tools such as Codex/opencode downgrade their own
+    // palette to 256 indexed colours and end up looking like the terminal
+    // theme instead of their intended theme.
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM_PROGRAM", "OpsTerm");
+    cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+    cmd.env("COLORFGBG", "15;0");
     // Force a sane prompt/encoding for interactive use.
     cmd.env(
         "LANG",

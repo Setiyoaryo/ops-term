@@ -4365,9 +4365,10 @@ dependencies = [
 
 [[package]]
 name = "opsterm-egui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "alacritty_terminal",
+ "arboard",
  "base64 0.22.1",
  "ed25519-dalek",
  "eframe",

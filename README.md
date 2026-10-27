@@ -62,10 +62,13 @@ copy · SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping ·
 traceroute · DNS · workspace save/restore · auto-reconnect · 4 UI themes · selectable terminal fonts and text palettes · font
 zoom · output export.
 
-Keyboard: `Ctrl+=`/`Ctrl+-`/`Ctrl+0` zoom · `Ctrl+C` copy (or ETX) · `Ctrl+A`
-select all · `Ctrl+V` paste · double-click selects a word · mouse wheel or
-`Shift+PageUp`/`Shift+PageDown` scrolls history. In the command editor, `Enter`
-sends and `Shift+Enter` inserts a new line. Scratchpad is available under View.
+Keyboard: `Ctrl+=`/`Ctrl+-`/`Ctrl+0` zoom · `Ctrl+Shift+C` or `Ctrl+Insert`
+copy · `Ctrl+C` copy (with a selection) or ETX · `Ctrl+Shift+A` select all ·
+`Ctrl+Shift+V` or `Shift+Insert` paste · `Ctrl+V` is sent to the application as
+literal-next (`0x16`), matching xterm/Tabby. Double-click selects a word; mouse
+wheel or `Shift+PageUp`/`Shift+PageDown` scrolls history. In the command editor,
+`Enter` sends and `Shift+Enter` inserts a new line. Scratchpad is available
+under View.
 
 GNS3 desktop console: in **Edit → Preferences → General → Console applications**,
 edit **Console application command for Telnet** and enter the installed executable's
@@ -84,9 +87,10 @@ built-in Telnet transport; no external `telnet` executable is required. VNC cons
 settings are separate and continue using your VNC viewer. Without command arguments,
 OpsTerm still opens Local Shell. Use `opsterm-egui --help` for console options.
 
-Clipboard images: with a CLI agent such as Codex in the terminal, `Ctrl+V` or
-`Ctrl+Shift+V` forwards its image-paste shortcut when the clipboard has no text.
-Text paste keeps its existing behavior. The agent reads the clipboard itself;
+Clipboard images: with a CLI agent such as Codex in the terminal, `Ctrl+V`
+forwards its image-paste shortcut (`0x16`) when the clipboard has no text.
+Text paste is `Ctrl+Shift+V` or `Shift+Insert`. The agent reads the clipboard
+itself;
 OpsTerm does not create image files or upload the local clipboard over SSH.
 The clipboard must be available where the agent runs.
 

@@ -104,11 +104,14 @@ pub fn paint(ui: &egui::Ui, session: &Session, opts: Paint<'_>) {
                 (point.line.0, col) >= (a.line.0, a.column.0)
                     && (point.line.0, col) <= (b.line.0, b.column.0)
             });
+            let inverse = cell.flags.contains(Flags::INVERSE);
             let background = if selected {
                 Color32::from_rgb(0x2F, 0x3E, 0x52)
             } else if hovered {
                 let a = theme.accent;
                 Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 46)
+            } else if inverse {
+                opts.colors.resolve(cell.fg, false)
             } else {
                 opts.colors.resolve(cell.bg, true)
             };
@@ -122,7 +125,14 @@ pub fn paint(ui: &egui::Ui, session: &Session, opts: Paint<'_>) {
                     background,
                 );
             }
-            let mut color = opts.colors.resolve(cell.fg, false);
+            // Reverse video (SGR 7) is how ncurses draws the selected row in
+            // ncdu/htop/mc. Ignoring it makes the cursor look frozen even when
+            // the keys are delivered correctly.
+            let mut color = if inverse && !selected && !hovered {
+                opts.colors.resolve(cell.bg, true)
+            } else {
+                opts.colors.resolve(cell.fg, false)
+            };
             for (start, end, highlight) in marks.iter().rev() {
                 if col >= *start && col <= *end {
                     color = *highlight;
@@ -130,6 +140,7 @@ pub fn paint(ui: &egui::Ui, session: &Session, opts: Paint<'_>) {
                 }
             }
             color = opts.colors.dim(color);
+            let underlined = cell.flags.intersects(Flags::ALL_UNDERLINES);
             let wide = cell.flags.intersects(
                 Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
             );
@@ -137,6 +148,16 @@ pub fn paint(ui: &egui::Ui, session: &Session, opts: Paint<'_>) {
                 text_run(&painter, &mut run, run_start, y, &opts, foreground);
                 run_start = col;
                 foreground = color;
+            }
+            if underlined {
+                let x = opts.origin.x + col as f32 * opts.cell.x;
+                painter.line_segment(
+                    [
+                        egui::Pos2::new(x, y + opts.cell.y - 1.0),
+                        egui::Pos2::new(x + opts.cell.x, y + opts.cell.y - 1.0),
+                    ],
+                    egui::Stroke::new(1.0, color),
+                );
             }
             if wide {
                 if cell.flags.contains(Flags::WIDE_CHAR) {
