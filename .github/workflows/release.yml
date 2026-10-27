@@ -63,6 +63,7 @@ jobs:
           python3 scripts/build_guard.py -- python3 -c 'import os, shutil; from pathlib import Path; from scripts.package_egui import version; from scripts.linux_distribution import build_distribution; arch=os.uname().machine; out=Path("release"); out.mkdir(exist_ok=True); binary=Path("target/release/opsterm-egui"); build_distribution(binary,version(),arch,out); shutil.copy2(binary,out/f"opsterm-egui-{version()}-linux-{arch}")'
       - name: Native X11 and Wayland rendering smoke
         run: |
+          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/native-close"
           python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/release/opsterm-egui "$RUNNER_TEMP/native-x11"
           python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/release/opsterm-egui
           image="$(find release -maxdepth 1 -name '*.AppImage' -print -quit)"

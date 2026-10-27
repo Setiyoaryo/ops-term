@@ -49,7 +49,8 @@ def main():
             canonical=f'{MANIFEST_PREFIX}\n{release_version}\n{key}\n{len(payload)}\n{digest}\n{url}'
             asset={'url':url,'size':len(payload),'sha256':digest,'signature':sign(args.key,canonical)}
             manifest.write_text(json.dumps({'version':release_version,'assets':{key:asset}}))
-        env=dict(os.environ, OPSTERM_UPDATE_URL=manifest.as_uri(), XDG_CONFIG_HOME=str(root/'config'))
+        runtime_tmp=root/'runtime';runtime_tmp.mkdir()
+        env=dict(os.environ, OPSTERM_UPDATE_URL=manifest.as_uri(), XDG_CONFIG_HOME=str(root/'config'), TMPDIR=str(runtime_tmp))
         env.pop('APPIMAGE',None)
         env.pop('APPDIR',None)
         def cli(flag, expected):

@@ -29,7 +29,7 @@ def main():
         root = Path(temporary)
         runtime = root / 'runtime'
         runtime.mkdir(mode=0o700)
-        env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), WAYLAND_DISPLAY='wayland-opsterm',
+        env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), WAYLAND_DISPLAY='wayland-opsterm', TMPDIR=str(root),
             XDG_DATA_HOME=str(root / 'data'), XDG_CONFIG_HOME=str(root / 'config'),
             LIBGL_ALWAYS_SOFTWARE='1', OPSTERM_DISPLAY_BACKEND='wayland', SHELL='/bin/sh')
         env.pop('DISPLAY', None)

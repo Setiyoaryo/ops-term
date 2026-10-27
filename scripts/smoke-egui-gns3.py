@@ -43,7 +43,7 @@ def main():
         server.bind(('127.0.0.1', 0))
         server.listen(1)
         server.settimeout(15)
-        env = dict(os.environ, XDG_DATA_HOME=folder, XDG_CONFIG_HOME=folder + '/config',
+        env = dict(os.environ, XDG_DATA_HOME=folder, XDG_CONFIG_HOME=folder + '/config', TMPDIR=folder,
                    GDK_BACKEND='x11', XDG_SESSION_TYPE='x11', WINIT_UNIX_BACKEND='x11',
                    LIBGL_ALWAYS_SOFTWARE='1')
         env.pop('WAYLAND_DISPLAY', None)

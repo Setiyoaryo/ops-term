@@ -12,6 +12,40 @@ multi-session workflows.
 OpsTerm is an **independent** terminal workspace for network operations,
 built with original code, assets and branding.
 
+## Portable Linux packages
+
+[Download the latest signed release](https://github.com/Setiyoaryo/ops-term/releases/latest).
+Both **x86_64** and **aarch64/ARM64** have a native binary, `.AppImage`, and portable
+`.tar.gz` archive. Releases target **glibc 2.35 or newer** (Ubuntu 22.04+, Debian
+12+, and current Fedora/Arch/CachyOS), with the host graphics/display stack.
+This is not a promise for musl/Alpine, 32-bit Linux, older glibc or an untested GPU.
+The current egui interface, local shell, SSH tools and GNS3 integration are retained.
+
+For example, on an x86_64 machine after downloading the v0.1.6 AppImage:
+
+```bash
+chmod +x opsterm-egui-0.1.6-linux-x86_64.AppImage
+./opsterm-egui-0.1.6-linux-x86_64.AppImage
+```
+
+If FUSE is unavailable, add `--appimage-extract-and-run`. AppImage updates verify a
+separate signed image asset and replace the outer file with a rollback backup;
+they never write to the mounted executable or replace an image with a raw binary.
+Use a regular image file; updating through symlink paths is refused.
+
+The archive includes `install.sh` for an atomic per-user install, desktop/icon
+files, `diagnose.sh`, and third-party notices. After extracting it, run
+`./install.sh` (default `~/.local`) or `./install.sh --prefix /absolute/prefix`.
+The default preserves the existing `~/.local/bin/opsterm-egui` GNS3 command path.
+Host tools such as OpenSSH and `curl`, and your Mesa/vendor graphics drivers,
+remain host prerequisites. No Flatpak host-shell sandbox changes are required.
+
+For display diagnosis, `OPSTERM_DISPLAY_BACKEND=x11` or `=wayland` explicitly
+selects that backend; the default is `auto`. The option preserves the environment
+inherited by terminal programs. X11 requires an available X11/XWayland server;
+Wayland requires a running compositor. `diagnose.sh` reports only public system
+capabilities and whether display variables are set, without dumping credentials.
+
 ## Download and updates
 
 Download the Linux x86_64 egui binary and checksum from
@@ -94,11 +128,16 @@ itself;
 OpsTerm does not create image files or upload the local clipboard over SSH.
 The clipboard must be available where the agent runs.
 
-Tab X and `Ctrl+Shift+W` ask before closing a tab, including disconnected tabs
-that still contain output. Window X and update restart also ask while tabs are
-open. **Cancel** receives initial focus; **Escape** cancels; **Ctrl+Enter**
-confirms after the prompt has been shown. Cancelling restores the previously
-focused field or terminal. Settings/help dialogs keep their normal close behavior.
+Tab X and `Ctrl+Shift+W` ask before disconnecting active SSH/Telnet/serial sessions
+or interrupting a detected local command/job. Idle local prompts, disconnected
+sessions and connection-opening placeholders close directly. Window X and update
+restart ask only when risky sessions remain. **Cancel** receives initial focus;
+**Escape** cancels; **Ctrl+Enter** confirms after the prompt has been shown.
+Cancelling restores the previously focused field or terminal. Linux local activity
+uses foreground/background processes, executable identity and terminal editing
+state; unknown/canonical shell states conservatively ask. Builtins that deliberately
+use prompt-like raw editing (such as `read -e`) cannot always be distinguished
+without shell integration. Settings/help dialogs keep their normal close behavior.
 
 The default workspace uses a minimal dark theme with a flat terminal surface.
 Click a device row once to open its tab immediately; connection setup runs in

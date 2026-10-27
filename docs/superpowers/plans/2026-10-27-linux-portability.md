@@ -8,9 +8,9 @@ Design: build on Ubuntu 22.04 (glibc 2.35) for x86_64 and aarch64. Enable existi
 
 Compatibility: mainstream glibc-based Linux >=2.35 on x86_64/aarch64, with a working graphics/display stack. No blanket claim for musl/Alpine, 32-bit or older glibc. AppImage extraction mode is documented for systems without usable FUSE. Portable archive includes the executable, desktop/icon assets, per-user installer and diagnostic helper; no host-shell sandbox.
 
-- [ ] Add failing Python tests for ELF glibc/dependency validation, pinned tool downloads, archive contents/permissions, extra signed assets, merge/publish of multi-arch manifests.
-- [ ] Implement distribution builder and package guardrails. Keep Python 3.10 compatibility for Ubuntu 22.04 via tomli fallback.
-- [ ] Add failing Rust tests for package path/format selection and backend parsing; implement validated AppImage update target and explicit display backend hook without changing child environment.
+- [x] Add failing Python tests for ELF glibc/dependency validation, pinned tool downloads, archive contents/permissions, extra signed assets, merge/publish of multi-arch manifests.
+- [x] Implement distribution builder and package guardrails. Keep Python 3.10 compatibility for Ubuntu 22.04 via tomli fallback.
+- [x] Add failing Rust tests for package path/format selection and backend parsing; implement validated AppImage update target and explicit display backend hook without changing child environment.
 - [ ] Update release matrix, build/test on baseline, run native GUI smoke and container CLI compatibility checks on Ubuntu, Debian, Fedora, Arch and CachyOS where official images are available.
 - [ ] Review exact committed sources in isolated worktree, publish a new signed version after checks, verify assets/install/update and document known unverified CachyOS symptoms.
 - [ ] Consume produced binaries/reports then clean generated caches, respecting each worktree's build lock and independent work in the original workspace.

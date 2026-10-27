@@ -5,7 +5,7 @@ family=$1
 binary=$2
 case "$family" in
     cachyos)
-        pacman -Syu --noconfirm --needed xorg-server-xvfb mesa libxkbcommon-x11 libx11 libxrandr libxi libxcursor libxinerama libglvnd ttf-dejavu xdotool imagemagick openssh weston python
+        pacman -Syu --noconfirm --needed xorg-server-xvfb xorg-xauth mesa libxkbcommon-x11 libx11 libxrandr libxi libxcursor libxinerama libglvnd ttf-dejavu xdotool imagemagick openssh weston python
         ;;
     ubuntu)
         export DEBIAN_FRONTEND=noninteractive

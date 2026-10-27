@@ -19,6 +19,9 @@ Usage:
   opsterm-egui --help
   opsterm-egui --version
 
+Display diagnosis: OPSTERM_DISPLAY_BACKEND=auto|x11|wayland
+Third-party licenses/source: https://github.com/Setiyoaryo/ops-term/blob/main/packaging/linux/THIRD_PARTY_NOTICES.txt
+
 Telnet defaults to port 23. Each launch opens a separate window.
 GNS3 Console application command for Telnet:
   /absolute/path/opsterm-egui --telnet \"{host}\" --port {port} --title \"{name}\"
