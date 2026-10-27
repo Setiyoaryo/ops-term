@@ -36,3 +36,5 @@ The clipboard fixture initially inherited the desktop's Wayland GTK backend duri
 ## Limits
 
 Image input depends on the agent supporting its image-paste key and accessing the same clipboard. There is no local-to-remote image transfer over SSH. Dual-format clipboards retain native text priority. Wayland uses the shared keyboard fallback and existing clipboard backend; the automated native desktop tests were run under X11/Xvfb. The isolated OpsTerm tests use temporary databases; existing inventory, vault and user windows were preserved.
+
+CI browser setup now matches the proven Pages setup: install the Playwright headless browser using hosted Ubuntu runtime libraries rather than re-downloading unrelated system fonts through a slow apt mirror. Browser checks remain enabled.

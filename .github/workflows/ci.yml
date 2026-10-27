@@ -33,8 +33,11 @@ jobs:
       - run: npm run test:build-guard
       - name: Release packaging metadata tests
         run: python3 scripts/build_guard.py -- python3 -m unittest scripts/test_package_egui.py scripts/test_publish_github_release.py
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+      - name: Install Playwright headless browser
+        # Hosted Ubuntu already provides Chrome runtime libraries.
+        # Keep the real browser checks while avoiding slow apt font mirrors.
+        timeout-minutes: 3
+        run: npx playwright install chromium --only-shell
       - name: Frontend build and E2E
         run: npm run e2e
       - name: Clean build and test caches
