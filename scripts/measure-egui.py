@@ -37,8 +37,9 @@ def idle_sample(pid):
 
 
 def launch(binary, env):
+    diagnostic = tempfile.TemporaryFile(mode="w+t")
     process = subprocess.Popen([str(binary)], env=env,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=diagnostic, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -48,12 +49,15 @@ def launch(binary, env):
             if result.returncode == 0:
                 return process, result.stdout.splitlines()[0]
             if process.poll() is not None:
-                raise RuntimeError("App exited before its window appeared")
+                diagnostic.seek(0)
+                raise RuntimeError("App exited before its window appeared:\n" + diagnostic.read()[-6000:])
             time.sleep(.05)
         raise RuntimeError("No app window appeared")
     except BaseException:
         stop(process)
         raise
+    finally:
+        diagnostic.close()
 
 
 def stop(process):

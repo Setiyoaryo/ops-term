@@ -1,0 +1,41 @@
+name: Linux graphics diagnostics
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arm-graphics:
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Original headless baseline
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3-tomli libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl squashfs-tools desktop-file-utils xvfb xdotool imagemagick weston libgl1-mesa-dri
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: 1.94.1
+      - name: Build diagnostic binary
+        run: python3 scripts/build_guard.py -- cargo build -p opsterm-egui --locked
+      - name: Capture original graphics startup
+        continue-on-error: true
+        run: python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/debug/opsterm-egui "$RUNNER_TEMP/original-graphics"
+      - name: Complete X11 and EGL software graphics stack
+        run: sudo apt-get install -y libxcursor1 libxrandr2 libxi6 libxinerama1 libxkbcommon-x11-0 libegl1 libegl-mesa0 libglx-mesa0 fonts-dejavu-core
+      - name: Verify graphics and active-session close behavior
+        run: |
+          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/debug/opsterm-egui "$RUNNER_TEMP/complete-graphics"
+          python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/debug/opsterm-egui "$RUNNER_TEMP/telnet"
+          python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/debug/opsterm-egui
+      - name: Clean caches
+        if: always()
+        run: |
+          if pgrep -af 'cargo|vite|build_guard'; then exit 1; fi
+          flock -n .opsterm-build.lock bash scripts/clean.sh --dist
