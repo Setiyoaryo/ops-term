@@ -347,7 +347,7 @@ mod tests {
 
     fn pseudo_serial() -> (File, Box<dyn ConnectionProvider>) {
         let (mut master, mut slave) = (-1, -1);
-        let mut name = [0i8; 128];
+        let mut name = [0 as libc::c_char; 128];
         assert_eq!(
             unsafe {
                 libc::openpty(

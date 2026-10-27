@@ -1,6 +1,6 @@
 # Feature Status
 
-27 Oktober 2026 — v0.1.6: paket native/AppImage/arsip portabel untuk x86_64 dan ARM64 dengan baseline glibc 2.35; updater AppImage mengganti file luar bertanda tangan. Konfirmasi X hanya untuk koneksi aktif atau pekerjaan lokal terdeteksi, bukan tab idle/terputus. [Rincian pengujian](docs/linux-portability-2026-10-27.md).
+27 Oktober 2026 — v0.1.7: paket native/AppImage/arsip portabel untuk x86_64 dan ARM64 dengan baseline glibc 2.35; updater AppImage mengganti file luar bertanda tangan. Konfirmasi X hanya untuk koneksi aktif atau pekerjaan lokal terdeteksi, bukan tab idle/terputus. [Rincian pengujian](docs/linux-portability-2026-10-27.md).
 
 27 Oktober 2026 — v0.1.5: kompatibilitas keyboard terminal (DECCKM/ncdu, F1–F12, modifier, bracketed paste, IME), mouse reporting/scroll opencode, truecolor + OSC/DA/DSR untuk tema Codex/opencode, dan render reverse-video. 117 test egui + 55 test core lulus. [Catatan rilis](docs/releases/v0.1.5.md).
 
