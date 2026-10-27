@@ -1,5 +1,7 @@
 # Feature Status
 
+27 Oktober 2026 — v0.1.4: command console Telnet GNS3 membuka satu jendela dengan nama node, tanpa local shell tambahan. Host/port/title divalidasi; roundtrip Telnet, dua jendela bersamaan, koneksi gagal dan konfirmasi close diuji. [Bukti pengujian](docs/gns3-console-2026-10-27.md).
+
 27 Oktober 2026 — v0.1.3: paste clipboard gambar ke CLI agent dan konfirmasi X tab/aplikasi/restart. PNG diuji pada clipboard asli dan composer Codex. [Bukti pengujian](docs/image-paste-close-2026-10-27.md).
 
 
@@ -31,6 +33,7 @@ Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia d
 | Area | Feature | Status |
 |---|---|---|
 | Transport | Local shell · SSH (OpenSSH + native russh) · Telnet (auto-login) · Serial | Implemented |
+| Integration | GNS3 desktop custom Telnet console command (one window per launch) | Tested |
 | Layout | Tabs (drag-reorder) · Split (drag-resize) · 2×2 grid monitor | Implemented |
 | Devices | Editor (host/port/proto/user/credential/pager/backspace/login) · vendor profiles · import CSV · filter | Implemented |
 | Commands | Library + button bar · broadcast to selected targets · runbooks (expect) · auto pager-disable & auto login/enable | Implemented |
@@ -38,7 +41,7 @@ Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia d
 | Tools | SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping · traceroute · DNS | Implemented |
 | Session | Workspace save/restore · auto-reconnect · bell + desktop notification | Implemented |
 | Look | macOS-style menu bar · 4 UI themes · font family/weight + zoom · 4 text palettes · brightness + preview | Implemented |
-| Tests | 81 egui tests + native GUI smoke (local PTY, tabs, composer, persisted appearance) | Tested |
+| Tests | 112 egui tests + native GUI smoke (local PTY, tabs, composer, appearance, agent image paste, close confirmation, GNS3 Telnet) | Tested |
 
 
 Legend: **Planned** · **In Progress** · **Implemented** (works, tests pass) ·

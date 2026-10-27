@@ -10,4 +10,4 @@ Plan (executed inline with writing-plans and TDD):
 - [x] Add failing parser tests in `egui/src/startup.rs`: default shell, GNS3 arguments, IPv6, title with spaces/metacharacters, malformed/duplicate/unknown arguments, display-free help/version.
 - [x] Implement parser and hook `egui/src/main.rs` startup into the existing queue. Test the resulting tab origin/title and absence of a local shell.
 - [x] Run guarded Rust suite, formatting, clippy and a real local TCP Telnet/Xvfb roundtrip. Verify failed connections remain closable and display errors.
-- [ ] Document the exact GNS3 Preferences command and separate-window behavior in README. Review, build/install a usable binary, and clean all generated caches after consuming outputs.
+- [x] Document the exact GNS3 Preferences command and separate-window behavior in README. Review, build/install a usable binary, and clean all generated caches after consuming outputs.
