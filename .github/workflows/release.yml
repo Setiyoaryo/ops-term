@@ -4,6 +4,12 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Rebuild an existing unpublished stable tag with current release infrastructure (empty = unsigned preview)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -28,20 +34,24 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '1'
       PYTHONDONTWRITEBYTECODE: '1'
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       - name: Install baseline build and GUI test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config python3-tomli libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl squashfs-tools desktop-file-utils xvfb xdotool imagemagick weston libgl1-mesa-dri
+          sudo apt-get install -y build-essential pkg-config python3-tomli libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl squashfs-tools desktop-file-utils xvfb xdotool imagemagick weston libgl1-mesa-dri libxcursor1 libxrandr2 libxi6 libxinerama1 libxkbcommon-x11-0 libegl1 libegl-mesa0 libglx-mesa0 fonts-dejavu-core
       - name: Validate trusted release tag
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         run: |
-          python3 -c 'import sys; from scripts.package_egui import version, validate_release_tag; validate_release_tag(sys.argv[1], version())' "$GITHUB_REF_NAME"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
           git merge-base --is-ancestor HEAD origin/main
+          python3 -c 'import sys; from scripts.package_egui import version, validate_release_tag; validate_release_tag(sys.argv[1], version())' "$RELEASE_TAG"
+          printf 'Validated immutable release source: %s\n' "$(git rev-parse HEAD)"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
         with:
           toolchain: 1.94.1
@@ -61,15 +71,21 @@ jobs:
         run: |
           python3 scripts/build_guard.py -- cargo build -p opsterm-egui --release --locked
           python3 scripts/build_guard.py -- python3 -c 'import os, shutil; from pathlib import Path; from scripts.package_egui import version; from scripts.linux_distribution import build_distribution; arch=os.uname().machine; out=Path("release"); out.mkdir(exist_ok=True); binary=Path("target/release/opsterm-egui"); build_distribution(binary,version(),arch,out); shutil.copy2(binary,out/f"opsterm-egui-{version()}-linux-{arch}")'
+      - name: Use current startup diagnostics without changing application sources
+        run: |
+          git show origin/main:scripts/measure-egui.py > "$RUNNER_TEMP/opsterm-measure.py"
+          cp "$RUNNER_TEMP/opsterm-measure.py" scripts/measure-egui.py
+          git diff --exit-code -- core egui Cargo.toml Cargo.lock vendor packaging
       - name: Native X11 and Wayland rendering smoke
         run: |
           python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/native-close"
+          OPSTERM_TEST_DISCARD_LOGS=1 python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/native-close-devnull"
           python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/release/opsterm-egui "$RUNNER_TEMP/native-x11"
           python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/release/opsterm-egui
           image="$(find release -maxdepth 1 -name '*.AppImage' -print -quit)"
           APPIMAGE_EXTRACT_AND_RUN=1 python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py "$image" "$RUNNER_TEMP/appimage-x11"
       - name: Materialize signing key
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         shell: bash
         run: |
           umask 077
@@ -78,10 +94,10 @@ jobs:
           OPSTERM_SIGNING_KEY_EOF
           test -s "$RUNNER_TEMP/opsterm-signing.key"
       - name: Sign verified artifacts
-        if: startsWith(github.ref, 'refs/tags/')
-        run: python3 -m scripts.sign_release --tag "$GITHUB_REF_NAME" --key "$RUNNER_TEMP/opsterm-signing.key"
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        run: python3 -m scripts.sign_release --tag "$RELEASE_TAG" --key "$RUNNER_TEMP/opsterm-signing.key"
       - name: Verify real signed AppImage replacement and rollback
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         run: python3 scripts/build_guard.py -- python3 scripts/smoke-appimage-update.py target/release/opsterm-egui --key "$RUNNER_TEMP/opsterm-signing.key"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -124,7 +140,7 @@ jobs:
           flock -n .opsterm-build.lock bash scripts/clean.sh --dist
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
     needs: [build, compatibility]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -132,10 +148,12 @@ jobs:
       contents: write
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: linux-*
@@ -154,7 +172,7 @@ jobs:
               git_protocol: https
           OPSTERM_GH_AUTH_EOF
       - name: Publish immutable complete release
-        run: python3 -m scripts.publish_github_release --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+        run: python3 -m scripts.publish_github_release --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
       - name: Remove publishing credential and caches
         if: always()
         run: |

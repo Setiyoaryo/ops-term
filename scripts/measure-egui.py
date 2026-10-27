@@ -38,8 +38,10 @@ def idle_sample(pid):
 
 def launch(binary, env):
     diagnostic = tempfile.TemporaryFile(mode="w+t")
+    discard = env.get("OPSTERM_TEST_DISCARD_LOGS") == "1"
     process = subprocess.Popen([str(binary)], env=env,
-                               stdout=diagnostic, stderr=subprocess.STDOUT)
+                               stdout=subprocess.DEVNULL if discard else diagnostic,
+                               stderr=subprocess.DEVNULL if discard else subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -50,7 +52,7 @@ def launch(binary, env):
                 return process, result.stdout.splitlines()[0]
             if process.poll() is not None:
                 diagnostic.seek(0)
-                raise RuntimeError("App exited before its window appeared:\n" + diagnostic.read()[-6000:])
+                raise RuntimeError(f"App exited ({process.returncode}) before its window appeared:\n" + diagnostic.read()[-6000:])
             time.sleep(.05)
         raise RuntimeError("No app window appeared")
     except BaseException:
