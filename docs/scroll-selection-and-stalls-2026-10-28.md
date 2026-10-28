@@ -22,5 +22,14 @@ Reports are lazy-created mode 0600 under a private diagnostics directory, with u
 
 - [x] Reproduce original selection failure in unit and native GUI tests; verify corrected history copy.
 - [x] Add content-free automatic stall diagnostics with privacy/lifecycle tests; preserve egui UI.
-- [ ] Run final checks and publish signed v0.1.8 packages through existing architecture/distro gates.
-- [ ] Verify official payloads and installed update; consume binaries and clean caches.
+- [x] Run final checks and publish signed v0.1.8 packages through existing architecture/distro gates.
+- [x] Verify official payloads and installed update; consume binaries and clean caches.
+
+## Published and installed evidence
+
+- Commit/tag: 6f77d66 / v0.1.8. Release run [40657328973](https://github.com/Setiyoaryo/ops-term/actions/runs/40657328973) passed both architectures, native X11/Wayland/GNS3/selection smoke, real signed AppImage update/rollback and all seven distribution compatibility jobs. Both architectures passed 59 core + 141 egui tests. CI 40657325018 passed; Pages 40659878028 passed and live website advertises v0.1.8.
+- Official GUI copy regression: x86_64 copied rows 413..492 and ARM64 copied rows 423..492, reaching beyond the original viewport.
+- All six official downloaded native/AppImage/archive payloads passed size, SHA-256 and Ed25519 verification against the repository public key. Release contains nineteen assets.
+- Existing v0.1.7 installed updater successfully installed v0.1.8; --version confirms it and --check-update reports up to date. Installed x86_64 SHA-256 is 56688265dfd6fbe3dc6683e9895f18c26f6e0f96937d193ef3207936a3bac31b, matching the official manifest.
+- Existing terminal windows were not killed or restarted. The new executable must be opened to activate its diagnostics; the earlier observed user process had already exited before installation. The random freeze remains unresolved pending actual incident evidence.
+- Fresh installed-release Xvfb drag/copy smoke passed (rows 421..493). Final npm run clean -- --dist completed; target/dist are absent.
