@@ -42,6 +42,7 @@ mod distribution;
 mod quick_connect;
 mod remote_files;
 mod repaint;
+mod responsiveness;
 mod session_io;
 mod startup;
 mod terminal_render;
@@ -1066,6 +1067,7 @@ struct App {
     scroll_speed: f32,
     terminal_scroll_speed: f32,
     applied_scroll_speed: f32,
+    ui_watchdog: Option<responsiveness::Monitor>,
     show_settings: bool,
     show_credentials: bool,
     vault: Option<opsterm_core::vault::Vault>,
@@ -1230,6 +1232,7 @@ impl App {
             scroll_speed: DEFAULT_SCROLL_SPEED,
             terminal_scroll_speed: DEFAULT_TERMINAL_SCROLL_SPEED,
             applied_scroll_speed: 0.0,
+            ui_watchdog: None,
             show_settings: false,
             show_credentials: false,
             vault: None,
@@ -2704,7 +2707,9 @@ impl App {
                         .sel_scroll_at
                         .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(45))
                     {
-                        let delta = if pos.y < top { -1 } else { 1 };
+                        // Positive display offsets reveal older scrollback; negative
+                        // deltas return toward live output.
+                        let delta = if pos.y < top { 1 } else { -1 };
                         session
                             .term
                             .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
@@ -2780,6 +2785,7 @@ impl App {
             None
         };
 
+        self.mark_ui_stage(responsiveness::Stage::TerminalPaint);
         terminal_render::paint(
             ui,
             &self.sessions[active],
@@ -4393,6 +4399,7 @@ fn card_frame() -> egui::Frame {
 
 impl App {
     fn show(&mut self, ui: &mut egui::Ui) {
+        self.mark_ui_stage(responsiveness::Stage::Frame);
         if !self.fonts_ready {
             self.install_selected_fonts(ui.ctx());
         }
@@ -4504,6 +4511,7 @@ impl App {
         if zoom_changed {
             self.save_ui_settings();
         }
+        self.mark_ui_stage(responsiveness::Stage::SessionOutput);
         self.poll_connections();
         self.pump_sessions();
         self.handle_session_events(&ctx);
@@ -6495,8 +6503,26 @@ impl App {
     }
 }
 
+impl App {
+    fn mark_ui_stage(&self, stage: responsiveness::Stage) {
+        if let Some(monitor) = &self.ui_watchdog {
+            monitor.mark(stage);
+        }
+    }
+}
+
 impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.mark_ui_stage(responsiveness::Stage::Input);
+        if let Some(monitor) = &self.ui_watchdog {
+            monitor.minimized(
+                input
+                    .viewports
+                    .get(&input.viewport_id)
+                    .and_then(|v| v.minimized)
+                    .unwrap_or(false),
+            );
+        }
         // Driver limits (often 16K) needlessly widen the CPU and GPU font atlas.
         // This changes packing, not glyph size, antialiasing or font quality.
         input.max_texture_side = Some(input.max_texture_side.unwrap_or(2048).min(2048));
@@ -6504,6 +6530,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+        self.mark_ui_stage(responsiveness::Stage::NativeLoop);
     }
 }
 
@@ -6607,6 +6634,7 @@ fn main() -> eframe::Result<()> {
         "OpsTerm",
         options,
         Box::new(|cc| {
+            app.ui_watchdog = responsiveness::Monitor::start(data_dir().join("diagnostics")).ok();
             app.install_selected_fonts(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
@@ -6769,6 +6797,84 @@ mod tests {
         );
         assert!(!app.sessions[0].selecting);
         assert!(app.sessions[0].selection().is_some());
+    }
+
+    fn drag_selection_across_viewport_edge(upward: bool) {
+        let mut app = test_app();
+        let (session, _) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 500.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input(vec![]), |ui| app.show(ui));
+        let session = &mut app.sessions[0];
+        for line in 0..200 {
+            session.processor.advance(
+                &mut session.term,
+                format!("history-{line:03}\r\n").as_bytes(),
+            );
+        }
+        if !upward {
+            session
+                .term
+                .scroll_display(alacritty_terminal::grid::Scroll::Delta(30));
+        }
+        let initial_offset = session.term.grid().display_offset();
+        let start = Pos2::new(430.0, 250.0);
+        let _ = ctx.run_ui(
+            input(vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]),
+            |ui| app.show(ui),
+        );
+        let anchor = app.sessions[0].sel_anchor.unwrap();
+        let edge = Pos2::new(430.0, if upward { 40.0 } else { 499.0 });
+        let _ = ctx.run_ui(input(vec![egui::Event::PointerMoved(edge)]), |ui| {
+            app.show(ui)
+        });
+        let after_drag = app.sessions[0].term.grid().display_offset();
+        if upward {
+            assert!(
+                after_drag > initial_offset,
+                "dragging above viewport must reveal older history"
+            );
+        } else {
+            assert!(
+                after_drag < initial_offset,
+                "dragging below viewport must return toward live output"
+            );
+        }
+        // A held pointer must keep scrolling even without another movement event.
+        app.sessions[0].sel_scroll_at = Some(Instant::now() - Duration::from_millis(60));
+        let _ = ctx.run_ui(input(vec![]), |ui| app.show(ui));
+        let after_hold = app.sessions[0].term.grid().display_offset();
+        assert_ne!(
+            after_hold, after_drag,
+            "held selection must continue scrolling"
+        );
+        assert_eq!(app.sessions[0].sel_anchor, Some(anchor));
+        assert_ne!(app.sessions[0].sel_head, Some(anchor));
+        assert!(!app.sessions[0].selection_text().is_empty());
+    }
+
+    #[test]
+    fn drag_selection_above_viewport_scrolls_into_history() {
+        drag_selection_across_viewport_edge(true);
+    }
+
+    #[test]
+    fn drag_selection_below_viewport_scrolls_toward_live_output() {
+        drag_selection_across_viewport_edge(false);
     }
 
     #[test]

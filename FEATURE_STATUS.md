@@ -1,5 +1,7 @@
 # Feature Status
 
+28 Oktober 2026 — v0.1.8: arah auto-scroll seleksi diperbaiki dan diuji dengan drag/hold/copy ke scrollback. Pencatatan otomatis tanpa isi terminal ditambahkan untuk menelusuri freeze acak; penyebab freeze belum terkonfirmasi. [Bukti dan batasan](docs/scroll-selection-and-stalls-2026-10-28.md).
+
 27 Oktober 2026 — v0.1.7: paket native/AppImage/arsip portabel untuk x86_64 dan ARM64 dengan baseline glibc 2.35; updater AppImage mengganti file luar bertanda tangan. Konfirmasi X hanya untuk koneksi aktif atau pekerjaan lokal terdeteksi, bukan tab idle/terputus. [Rincian pengujian](docs/linux-portability-2026-10-27.md).
 
 27 Oktober 2026 — v0.1.5: kompatibilitas keyboard terminal (DECCKM/ncdu, F1–F12, modifier, bracketed paste, IME), mouse reporting/scroll opencode, truecolor + OSC/DA/DSR untuk tema Codex/opencode, dan render reverse-video. 117 test egui + 55 test core lulus. [Catatan rilis](docs/releases/v0.1.5.md).
@@ -45,7 +47,7 @@ Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia d
 | Tools | SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping · traceroute · DNS | Implemented |
 | Session | Workspace save/restore · auto-reconnect · bell + desktop notification | Implemented |
 | Look | macOS-style menu bar · 4 UI themes · font family/weight + zoom · 4 text palettes · brightness + preview | Implemented |
-| Tests | 134 egui tests + native GUI smoke (local PTY, tabs, composer, appearance, agent image paste, close confirmation, GNS3 Telnet) | Tested |
+| Tests | 141 egui tests + native GUI smoke (local PTY, tabs, composer, appearance, agent image paste, close confirmation, GNS3 Telnet) | Tested |
 
 
 Legend: **Planned** · **In Progress** · **Implemented** (works, tests pass) ·
