@@ -38,3 +38,14 @@ The unpublished v0.1.6 matrix found a pre-existing ARM64-only test compile error
 The first v0.1.7 release matrix compiled and passed Rust/clippy and created both portable formats, but both native GUI startup probes exited before a visible window while stderr was discarded. Separate ARM diagnostics then passed all GUI probes in both debug (40488919366) and optimized (40490059284) builds, including before the extra runtime packages were installed. The original startup failure was not reproduced in these diagnostic runs, so no speculative application fix was claimed.
 
 Release infrastructure now captures startup errors/exit status, declares complete software X11/EGL dependencies, and also checks the original /dev/null stdio mode. A manual release_tag input rebuilds an existing unpublished immutable tag using current infrastructure; checkout equality and trusted-main ancestry are checked before repository code runs. Application sources/public key remain exactly from that tag; only the trusted-main test diagnostic helper is overlaid. All product, signature, architecture and distro gates remain required. Independent focused review approved this path after validation-order hardening. No public tag or published asset was rewritten.
+
+## Published release verification — 2026-10-28
+
+- Immutable source tag v0.1.7 (a6a096a), release workflow 40492894438: both native architectures, all GUI/signature/update gates, all seven distribution jobs, and publication passed. Main CI 40492891843 and Pages 40495378540 passed. Latest stable release and live website both report v0.1.7.
+- All six downloaded official payloads passed SHA-256, size and Ed25519 manifest verification using the repository public key. Nineteen public assets include the manifest and signature/checksum sidecars.
+- Installed ~/.local/bin/opsterm-egui reports v0.1.7 and matches official x86_64 SHA-256 057cfd609277bb2b1f9081b1f82c5faeaa829d7357bf71d3c74d2329a11c2b61. Its --check-update reports up to date. Existing application windows were left running.
+- Fresh installed-release Xvfb close smoke passed: idle local tab closes immediately, foreground sleep prompts, Escape/Enter cancel, Ctrl+C returns to idle.
+- Public release: https://github.com/Setiyoaryo/ops-term/releases/tag/v0.1.7 ; pipeline: https://github.com/Setiyoaryo/ops-term/actions/runs/40492894438 .
+- The unspecified original CachyOS symptom remains unconfirmed; passing container startup is compatibility evidence rather than proof about the user's GPU/desktop.
+- Fresh installed-release GNS3/Telnet smoke passed real command roundtrip, simultaneous windows, active-close cancellation and immediate disconnected-tab close; active/disconnected screenshots were inspected.
+- Both repository worktrees were cleaned with npm run clean -- --dist; target/dist caches are absent. Only task-created Ubuntu 22.04 and CachyOS Docker images were removed; pre-existing images were preserved.
