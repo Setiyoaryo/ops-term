@@ -1,5 +1,5 @@
 //! Explicit confirmation before disconnecting sessions or quitting the app.
-use eframe::egui::{self, Color32, Id};
+use eframe::egui::{self, Color32, Id, RichText, Stroke, Vec2};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,39 +62,146 @@ impl Confirmation {
                 .last_background_focus
                 .or_else(|| ctx.memory(|m| m.focused()));
         }
-        let (heading, details, action) = match &target {
+        let (heading, summary_label, summary, details, action) = match &target {
             Target::Tab { title, .. } => (
-                "Close session?", format!("Close “{title}” and remove its terminal output from this workspace? Running commands may be interrupted."), "Close session",
+                "Close session?", "SESSION", title.clone(),
+                "Running commands may be interrupted. This tab and its terminal output will be closed.",
+                "Close session",
             ),
             Target::Application { sessions } => (
-                "Close OpsTerm?", format!("This interrupts {sessions} active session(s). Running commands may be interrupted."), "Close OpsTerm",
+                "Close OpsTerm?", "ACTIVE SESSIONS", sessions.to_string(),
+                "Your active sessions will be disconnected. Running commands may be interrupted.",
+                "Close OpsTerm",
             ),
             Target::Restart { sessions, .. } => (
-                "Restart OpsTerm?", format!("Restarting interrupts {sessions} active session(s). Running commands may be interrupted."), "Restart",
+                "Restart OpsTerm?", "ACTIVE SESSIONS", sessions.to_string(),
+                "Your active sessions will be interrupted during restart. Running commands may be interrupted.",
+                "Restart",
             ),
         };
         let mut cancel = false;
         let confirm_shortcut =
             ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
         let mut confirm = false;
-        let modal = egui::Modal::new(Id::new("opsterm-close-confirmation")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.heading(heading);
-            ui.add_space(8.0);
-            ui.label(details);
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let response = ui.button("Cancel");
-                if opening {
-                    response.request_focus();
-                }
-                cancel = response.clicked();
-                confirm = ui
-                    .button(egui::RichText::new(action).color(Color32::from_rgb(224, 108, 117)))
-                    .on_hover_text("Ctrl+Enter to confirm")
-                    .clicked();
+        let frame = egui::Frame::new()
+            .fill(ctx.global_style().visuals.window_fill)
+            .stroke(Stroke::new(
+                1.0,
+                ctx.global_style().visuals.window_stroke.color,
+            ))
+            .corner_radius(12)
+            .inner_margin(24)
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 12],
+                blur: 32,
+                spread: 0,
+                color: Color32::from_black_alpha(100),
             });
-        });
+        let modal = egui::Modal::new(Id::new("opsterm-close-confirmation"))
+            .frame(frame)
+            .backdrop_color(Color32::from_black_alpha(160))
+            .show(ctx, |ui| {
+                ui.set_width(408.0);
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                ui.horizontal(|ui| {
+                    let (badge, _) =
+                        ui.allocate_exact_size(Vec2::splat(36.0), egui::Sense::hover());
+                    let warning = Color32::from_rgb(224, 132, 137);
+                    let painter = ui.painter();
+                    painter.rect_filled(
+                        badge,
+                        10,
+                        Color32::from_rgba_unmultiplied(194, 72, 83, 24),
+                    );
+                    let center = badge.center();
+                    let triangle = vec![
+                        center + egui::vec2(0.0, -9.0),
+                        center + egui::vec2(10.0, 8.0),
+                        center + egui::vec2(-10.0, 8.0),
+                        center + egui::vec2(0.0, -9.0),
+                    ];
+                    painter.add(egui::Shape::line(triangle, Stroke::new(1.5, warning)));
+                    painter.line_segment(
+                        [
+                            center + egui::vec2(0.0, -3.0),
+                            center + egui::vec2(0.0, 2.0),
+                        ],
+                        Stroke::new(1.5, warning),
+                    );
+                    painter.circle_filled(center + egui::vec2(0.0, 5.0), 0.9, warning);
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(heading).size(21.0).strong());
+                });
+                ui.add_space(12.0);
+                egui::Frame::new()
+                    .fill(ui.visuals().extreme_bg_color)
+                    .stroke(Stroke::new(
+                        1.0,
+                        ui.visuals().widgets.noninteractive.bg_stroke.color,
+                    ))
+                    .corner_radius(6)
+                    .inner_margin(12)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(summary_label)
+                                .size(10.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&summary).monospace().size(14.0).strong(),
+                            )
+                            .wrap(),
+                        );
+                    });
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(details)
+                            .size(14.0)
+                            .color(ui.visuals().weak_text_color()),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    confirm = ui
+                        .scope(|ui| {
+                            let widgets = &mut ui.visuals_mut().widgets;
+                            for (visual, fill) in [
+                                (&mut widgets.inactive, Color32::from_rgb(164, 55, 65)),
+                                (&mut widgets.hovered, Color32::from_rgb(188, 66, 77)),
+                                (&mut widgets.active, Color32::from_rgb(141, 43, 53)),
+                            ] {
+                                visual.weak_bg_fill = fill;
+                                visual.bg_fill = fill;
+                                visual.bg_stroke = Stroke::new(1.0, fill);
+                                visual.fg_stroke.color = Color32::WHITE;
+                                visual.corner_radius = 6.into();
+                            }
+                            ui.add_sized(
+                                [124.0, 36.0],
+                                egui::Button::new(
+                                    RichText::new(action).size(14.0).color(Color32::WHITE),
+                                ),
+                            )
+                            .on_hover_text("Ctrl+Enter to confirm")
+                            .clicked()
+                        })
+                        .inner;
+                    let response = ui.add_sized(
+                        [92.0, 36.0],
+                        egui::Button::new(RichText::new("Cancel").size(14.0)).corner_radius(6),
+                    );
+                    if opening {
+                        response.request_focus();
+                    }
+                    cancel = response.clicked();
+                });
+            });
         // A plain Enter activates the focused button; Cancel receives initial focus.
         confirm |= modal.is_top_modal && confirm_shortcut;
         if cancel || modal.should_close() {

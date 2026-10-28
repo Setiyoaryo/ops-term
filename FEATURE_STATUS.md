@@ -1,5 +1,7 @@
 # Feature Status
 
+28 Oktober 2026 — v0.1.9: dialog konfirmasi tutup dirapikan dengan hierarki teks, panel nama sesi, ikon vektor, padding lebih lega dan tombol destruktif solid. Fokus awal Cancel serta kebijakan sesi aktif tetap dipertahankan.
+
 28 Oktober 2026 — v0.1.8: arah auto-scroll seleksi diperbaiki dan diuji dengan drag/hold/copy ke scrollback. Pencatatan otomatis tanpa isi terminal ditambahkan untuk menelusuri freeze acak; penyebab freeze belum terkonfirmasi. [Bukti dan batasan](docs/scroll-selection-and-stalls-2026-10-28.md).
 
 27 Oktober 2026 — v0.1.7: paket native/AppImage/arsip portabel untuk x86_64 dan ARM64 dengan baseline glibc 2.35; updater AppImage mengganti file luar bertanda tangan. Konfirmasi X hanya untuk koneksi aktif atau pekerjaan lokal terdeteksi, bukan tab idle/terputus. [Rincian pengujian](docs/linux-portability-2026-10-27.md).
