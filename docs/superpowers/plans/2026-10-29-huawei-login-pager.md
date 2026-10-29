@@ -10,8 +10,10 @@ Architecture: replace the pager timer with a per-session, one-shot pending start
 - [x] Implement core prompt normalization (owned core/providers/telnet.rs, core/Cargo.toml only), and session pager sequencing + username fallback (root owns egui sources).
 - [x] Extend real native GUI login smoke for delayed/fragmented colored Huawei prompts, double click, one TCP connection, exact username/password/pager order and no pre-auth pager. Use an isolated D-Bus/keyring and synthetic credentials; preserve real user vault/keyring. GUI implementer owns scripts/smoke-login.py only.
 - [x] Run guarded Rust tests/fmt/clippy, native smoke and independent security/correctness review. All builds/tests serialized by root; no cleanup during active work.
-- [ ] Publish and install signed v0.1.10 through existing multi-arch/distro gates; verify public assets, actual installed login flow and clean caches.
+- [x] Publish and install signed v0.1.10 through existing multi-arch/distro gates; verify public assets, actual installed login flow and clean caches.
 
 Parallel work follows subagent-driven-development/dispatching-parallel-agents: separate files, root coordinates all Cargo commands and lock/cleanup. Implementers stage failing tests first and await root RED evidence before changing production logic.
 
 Review refinements: decoded reader-byte completion watermark prevents stale UI banner release; cache sampling/publishing order is covered by deterministic regression. Invalid script validation cancels pending pager. Existing dependency advisories are recorded without suppression in docs/telnet-startup-2026-10-29.md.
+
+Completed: signed public release/install, fresh installed native login smoke, architecture/distro gates, asset cryptographic verification and final cache cleanup. See docs/telnet-startup-2026-10-29.md for evidence and existing audit limitations.

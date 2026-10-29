@@ -34,3 +34,12 @@ OpenSSH remains the default SSH engine, but the optional native engine uses the 
 ## Final local validation before publication
 
 Versioned v0.1.10 source passed 68 core + 147 egui tests with private XDG state and no access to the user's Secret Service. Formatting and clippy all-targets with -D warnings passed; twenty packaging/publishing tests passed. Final rebuilt native GUI saved-login smoke passed after the output-watermark and parser short-circuit changes, with screenshots inspected under /tmp/opsterm-huawei-login-final. Native close confirmation regression also passed. An independent final source/security review approved the fixes, while explicitly retaining the pre-existing dependency audit findings. The synthetic secure-store helper is temporarily retained outside build caches only for verifying the eventual installed signed release.
+
+## Published and installed verification
+
+- Immutable tag v0.1.10 / commit 49a567f. [Release workflow 40811347603](https://github.com/Setiyoaryo/ops-term/actions/runs/40811347603) passed both architecture builds, 68 core + 147 egui tests on each, native saved-login GUI, X11/Wayland/GNS3/close/selection probes, signed AppImage update/rollback and all seven distro compatibility jobs. CI 40811231062 and Pages 40813332913 passed; live website reports v0.1.10.
+- Both x86_64 and ARM64 native saved-login GUI gates passed the private durable credential lookup, delayed colored prompts, empty-username fallback, single double-click connection, strict pager ordering and immediate keyboard roundtrip.
+- All six official downloaded payloads passed size, SHA-256 and Ed25519 verification with the existing repository public key; nineteen assets were published. Existing v0.1.9 updater installed the official v0.1.10 binary. Installed SHA-256 c82deb3613a00920472be4c6e14405d510ddaea6ebbf3ecda0155a9a3980519f matches its signed manifest; --version and --check-update report v0.1.10/current.
+- Fresh installed-release native saved-login smoke passed again with screenshots under /tmp/opsterm-huawei-installed-010. Existing user sessions were not terminated or restarted.
+- Re-running cargo-audit against the committed Cargo.lock returned the same four documented pre-existing advisories; no suppression or clean-audit claim was added.
+- Temporary verification payloads and the consumed synthetic helper were removed after use. Final guarded cleanup removes target/dist and generated test caches; manifests, sidecars and screenshots remain outside the repository for review.
