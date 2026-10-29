@@ -30,4 +30,3 @@ The native close-confirmation GUI regression, twenty packaging/publishing tests,
 - Existing installed updater installed the pinned official v0.1.11 manifest. Installed x86_64 SHA-256 fcedaed16b2725ba6c428d59505990a57b7a830dbef3e6bac28d4b66a61747b4 matches its signed manifest. --version reports v0.1.11 and the stable --check-update reports up to date.
 - The real signed native GUI update/rollback regression passed again using the installed official binary, with screenshots retained under /tmp/opsterm-native-update-installed-011. No user session was terminated or restarted.
 - Consumed temporary payloads were removed, retaining manifests, sidecars, logs and screenshots outside the repository. Final cleanup removes generated caches; target and dist are absent.
-
