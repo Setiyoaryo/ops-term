@@ -21,6 +21,7 @@ parking_lot = "0.12"
 rusqlite = { version = "0.40", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
+vte = "0.15"
 libc = "0.2"
 keyring = { version = "3", features = ["linux-native", "sync-secret-service", "crypto-rust"] }
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }

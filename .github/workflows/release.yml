@@ -44,7 +44,7 @@ jobs:
       - name: Install baseline build and GUI test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config python3-tomli libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl squashfs-tools desktop-file-utils xvfb xdotool imagemagick weston libgl1-mesa-dri libxcursor1 libxrandr2 libxi6 libxinerama1 libxkbcommon-x11-0 libegl1 libegl-mesa0 libglx-mesa0 fonts-dejavu-core python3-gi gir1.2-gtk-3.0
+          sudo apt-get install -y build-essential pkg-config python3-tomli libxkbcommon-dev libx11-dev libxcb1-dev libgl1-mesa-dev libwayland-dev openssl curl squashfs-tools desktop-file-utils xvfb xdotool imagemagick weston libgl1-mesa-dri libxcursor1 libxrandr2 libxi6 libxinerama1 libxkbcommon-x11-0 libegl1 libegl-mesa0 libglx-mesa0 fonts-dejavu-core python3-gi gir1.2-gtk-3.0 dbus-x11 gnome-keyring libglib2.0-bin
       - name: Validate trusted release tag
         if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         run: |
@@ -71,6 +71,8 @@ jobs:
         run: |
           python3 scripts/build_guard.py -- cargo build -p opsterm-egui --release --locked
           python3 scripts/build_guard.py -- python3 -c 'import os, shutil; from pathlib import Path; from scripts.package_egui import version; from scripts.linux_distribution import build_distribution; arch=os.uname().machine; out=Path("release"); out.mkdir(exist_ok=True); binary=Path("target/release/opsterm-egui"); build_distribution(binary,version(),arch,out); shutil.copy2(binary,out/f"opsterm-egui-{version()}-linux-{arch}")'
+      - name: Build synthetic credential smoke helper
+        run: python3 scripts/build_guard.py -- cargo build -p opsterm-core --example credential_store_smoke --release --locked
       - name: Use current startup diagnostics without changing application sources
         run: |
           git show origin/main:scripts/measure-egui.py > "$RUNNER_TEMP/opsterm-measure.py"
@@ -81,6 +83,7 @@ jobs:
           python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/native-close"
           OPSTERM_TEST_DISCARD_LOGS=1 python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-close.py target/release/opsterm-egui "$RUNNER_TEMP/native-close-devnull"
           python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-selection.py target/release/opsterm-egui "$RUNNER_TEMP/native-selection"
+          OPSTERM_LOGIN_HELPER=target/release/examples/credential_store_smoke python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-login.py target/release/opsterm-egui "$RUNNER_TEMP/native-login"
           python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-egui-gns3.py target/release/opsterm-egui "$RUNNER_TEMP/native-x11"
           python3 scripts/build_guard.py -- python3 scripts/smoke-egui-wayland.py target/release/opsterm-egui
           image="$(find release -maxdepth 1 -name '*.AppImage' -print -quit)"

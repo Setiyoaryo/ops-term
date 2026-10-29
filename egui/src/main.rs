@@ -44,6 +44,7 @@ mod remote_files;
 mod repaint;
 mod responsiveness;
 mod session_io;
+mod session_startup;
 mod startup;
 mod terminal_render;
 mod update;
@@ -271,6 +272,8 @@ struct Session {
     connection_error: Option<String>,
     wake: repaint::Wake,
     io_status: Option<session_io::Status>,
+    startup_pager: Option<session_startup::Pager>,
+    output_bytes: u64,
 }
 
 impl Session {
@@ -366,6 +369,8 @@ impl Session {
             connection_error: None,
             wake,
             io_status: None,
+            startup_pager: None,
+            output_bytes: 0,
         }
     }
 
@@ -528,6 +533,7 @@ impl Session {
             };
             received = true;
             self.processor.advance(&mut self.term, &chunk);
+            self.output_bytes = self.output_bytes.saturating_add(chunk.len() as u64);
             if started.elapsed() >= Duration::from_millis(1) {
                 break;
             }
@@ -2322,13 +2328,18 @@ impl App {
         let secret = credential_ref
             .as_ref()
             .and_then(|reference| self.vault.as_ref()?.get_secret(reference));
-        let username = saved.username.clone().or_else(|| {
-            saved
-                .credential_ref
-                .as_deref()
-                .and_then(|r| self.db.get_credential(r).ok().flatten())
-                .and_then(|c| c.username)
-        });
+        let username = saved
+            .username
+            .clone()
+            .filter(|u| !u.trim().is_empty())
+            .or_else(|| {
+                saved
+                    .credential_ref
+                    .as_deref()
+                    .and_then(|r| self.db.get_credential(r).ok().flatten())
+                    .and_then(|c| c.username)
+                    .filter(|u| !u.trim().is_empty())
+            });
         let origin = match saved.protocol.as_str() {
             "ssh" | "" => Origin::Ssh(SshSpec {
                 host: saved.host.clone(),
@@ -2383,17 +2394,68 @@ impl App {
         );
     }
 
-    /// Send the vendor pager-disable command shortly after connecting.
-    fn apply_pager(&self, saved: &SavedSession, target: u64) {
-        if let Some(cmd) = pager_command(&saved.settings_override) {
-            if let Some(sess) = self.sessions.iter().find(|s| s.id == target) {
-                let prov = sess.provider();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(1500));
-                    let mut bytes = cmd.into_bytes();
-                    bytes.push(b'\r');
-                    let _ = prov.write(&bytes);
-                });
+    /// Queue one pager command; credentials and a live CLI prompt release it.
+    fn apply_pager(&mut self, saved: &SavedSession, target: u64) {
+        if let Some(command) = pager_command(&saved.settings_override) {
+            let vendor = saved
+                .settings_override
+                .as_ref()
+                .and_then(|v| v.get("pager"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("none");
+            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == target) {
+                session.startup_pager = Some(session_startup::Pager::new(vendor, command));
+            }
+        }
+    }
+
+    fn tick_startup_pagers(&mut self) {
+        for session in &mut self.sessions {
+            let Some(pager) = session.startup_pager.as_ref() else {
+                continue;
+            };
+            if session.exited || !session.provider.is_alive() {
+                session.startup_pager = None;
+                continue;
+            }
+            if pager.expired() {
+                session.startup_pager = None;
+                self.flash =
+                    "Pager setup skipped: no ready CLI prompt; send it manually if needed.".into();
+                continue;
+            }
+            if session.opening
+                || session.provider.is_authenticating()
+                || self.runners.iter().any(|r| r.target == session.id)
+            {
+                continue;
+            }
+            if session
+                .provider
+                .authentication_output_barrier()
+                .is_some_and(|barrier| session.output_bytes < barrier)
+            {
+                continue;
+            }
+            // Always inspect the live cursor, independently of history scrolling.
+            let cursor = session.term.grid().cursor.point;
+            if cursor.column.0 == 0 {
+                continue;
+            }
+            let prompt = session.term.bounds_to_string(
+                Point::new(cursor.line, Column(0)),
+                Point::new(cursor.line, Column(cursor.column.0 - 1)),
+            );
+            if pager.ready(&prompt, session.output_bytes) {
+                let bytes = session
+                    .startup_pager
+                    .take()
+                    .expect("pending pager")
+                    .into_bytes();
+                if session.provider.write(&bytes).is_err() {
+                    self.flash =
+                        "Pager command could not be sent; reconnect or send it manually.".into();
+                }
             }
         }
     }
@@ -3728,6 +3790,12 @@ impl App {
         }
     }
 
+    fn cancel_startup_pager(&mut self, target: u64) {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == target) {
+            session.startup_pager = None;
+        }
+    }
+
     fn start_runner_for(&mut self, target: u64, script: &str) {
         let steps = parse_expect(script);
         if steps.is_empty() {
@@ -3735,18 +3803,21 @@ impl App {
         }
         if steps.len() > 1024 {
             self.flash = "script has too many steps".into();
+            self.cancel_startup_pager(target);
             return;
         }
         for step in &steps {
             if let Step::WaitFor(pattern, _) = step {
                 if let Err(e) = regex::Regex::new(pattern) {
                     self.flash = format!("invalid regex: {e}");
+                    self.cancel_startup_pager(target);
                     return;
                 }
             }
         }
         if self.runners.iter().any(|r| r.target == target) {
             self.flash = "a script is already running on this session".into();
+            self.cancel_startup_pager(target);
             return;
         }
         self.runners.push(Runner {
@@ -3759,7 +3830,7 @@ impl App {
 
     fn tick_runner(&mut self) {
         for mut r in std::mem::take(&mut self.runners) {
-            let Some(session) = self.sessions.iter().find(|s| s.id == r.target) else {
+            let Some(session) = self.sessions.iter_mut().find(|s| s.id == r.target) else {
                 self.flash = "script stopped: target session closed".into();
                 continue;
             };
@@ -3783,6 +3854,9 @@ impl App {
                             self.flash = format!("script write failed: {e}");
                             failed = true;
                             break;
+                        }
+                        if let Some(pager) = session.startup_pager.as_mut() {
+                            pager.after_script_write(session.output_bytes);
                         }
                         r.index += 1;
                     }
@@ -3820,10 +3894,14 @@ impl App {
                     }
                 }
             }
+            if failed {
+                session.startup_pager = None;
+            }
             if !failed && r.index < r.steps.len() {
                 self.runners.push(r);
             }
         }
+        self.tick_startup_pagers();
     }
 
     fn save_editor(&mut self, ed: &EditorState) -> bool {
@@ -8960,6 +9038,185 @@ mod tests {
         assert_eq!(spec.baud, 9600);
         assert_eq!(spec.data_bits, 8);
         assert_eq!(spec.parity, "none");
+    }
+
+    struct StartupGateProvider {
+        writes: Arc<Mutex<Vec<u8>>>,
+        pending: Arc<AtomicBool>,
+        barrier: Arc<AtomicU64>,
+    }
+    impl ConnectionProvider for StartupGateProvider {
+        fn write(&self, data: &[u8]) -> opsterm_core::error::AppResult<()> {
+            self.writes.lock().unwrap().extend_from_slice(data);
+            Ok(())
+        }
+        fn resize(&self, _: TerminalDimensions) -> opsterm_core::error::AppResult<()> {
+            Ok(())
+        }
+        fn kill(&self) -> opsterm_core::error::AppResult<()> {
+            Ok(())
+        }
+        fn take_reader(&self) -> opsterm_core::error::AppResult<Box<dyn Read + Send>> {
+            Ok(Box::new(std::io::empty()))
+        }
+        fn is_alive(&self) -> bool {
+            true
+        }
+        fn is_authenticating(&self) -> bool {
+            self.pending.load(Ordering::Acquire)
+        }
+        fn authentication_output_barrier(&self) -> Option<u64> {
+            match self.barrier.load(Ordering::Acquire) {
+                0 => None,
+                value => Some(value),
+            }
+        }
+    }
+
+    #[test]
+    fn regression_pager_rejects_rendered_pre_auth_banner_behind_output_barrier() {
+        let mut app = test_app();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let pending = Arc::new(AtomicBool::new(true));
+        let barrier = Arc::new(AtomicU64::new(0));
+        let provider = StartupGateProvider {
+            writes: writes.clone(),
+            pending: pending.clone(),
+            barrier: barrier.clone(),
+        };
+        let mut session = Session::new(
+            "Huawei".into(),
+            Box::new(provider),
+            80,
+            24,
+            None,
+            Origin::Local,
+        );
+        let target = session.id;
+        session.processor.advance(&mut session.term, b"<BR-APJI> ");
+        app.sessions.push(session);
+        let saved = saved_ssh(
+            &app.db,
+            "Huawei",
+            Some(serde_json::json!({"pager":"huawei"})),
+        );
+        app.apply_pager(&saved, target);
+        app.tick_runner();
+        assert!(writes.lock().unwrap().is_empty());
+        // The transport finished its answers, but UI output is still behind it.
+        barrier.store(64, Ordering::Release);
+        pending.store(false, Ordering::Release);
+        app.tick_runner();
+        assert!(
+            writes.lock().unwrap().is_empty(),
+            "stale banner must not release pager while credential output is queued"
+        );
+        let session = &mut app.sessions[0];
+        session
+            .processor
+            .advance(&mut session.term, b"\r\nPassword : ");
+        session.output_bytes = 64;
+        app.tick_runner();
+        assert!(writes.lock().unwrap().is_empty());
+        let session = &mut app.sessions[0];
+        session
+            .processor
+            .advance(&mut session.term, b"\r\n<BR-APJI> ");
+        session.output_bytes += 13;
+        app.tick_runner();
+        assert_eq!(&*writes.lock().unwrap(), b"screen-length 0 temporary\r");
+    }
+
+    #[test]
+    fn regression_invalid_saved_startup_script_cancels_pending_pager() {
+        for script in [
+            "waitfor [ 100".to_owned(),
+            "sendline display version\n".repeat(1025),
+        ] {
+            let mut app = test_app();
+            let (mut session, writes) = test_session(std::io::empty());
+            session.processor.advance(&mut session.term, b"<BR-APJI> ");
+            let target = session.id;
+            app.sessions.push(session);
+            let saved = saved_ssh(
+                &app.db,
+                "Huawei",
+                Some(serde_json::json!({"pager":"huawei"})),
+            );
+            app.apply_pager(&saved, target);
+            app.start_runner_for(target, &script);
+            app.tick_runner();
+            assert!(
+                writes.lock().unwrap().is_empty(),
+                "invalid startup script must cancel automatic pager actions"
+            );
+        }
+    }
+
+    #[test]
+    fn regression_pager_waits_for_authenticated_cli_instead_of_elapsed_time() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        let target = session.id;
+        app.sessions.push(session);
+        let saved = saved_ssh(
+            &app.db,
+            "Huawei",
+            Some(serde_json::json!({"pager":"huawei"})),
+        );
+        app.apply_pager(&saved, target);
+        let session = &mut app.sessions[0];
+        session.processor.advance(&mut session.term, b"Username: ");
+        std::thread::sleep(Duration::from_millis(1700));
+        app.tick_runner();
+        assert!(
+            writes.lock().unwrap().is_empty(),
+            "pager must not be sent into a login prompt even after 1.5 seconds"
+        );
+        let session = &mut app.sessions[0];
+        session
+            .processor
+            .advance(&mut session.term, b"\r\nPassword: ");
+        app.tick_runner();
+        assert!(writes.lock().unwrap().is_empty());
+        let session = &mut app.sessions[0];
+        session
+            .processor
+            .advance(&mut session.term, b"\r\n<BR-APJI> ");
+        app.tick_runner();
+        assert_eq!(&*writes.lock().unwrap(), b"screen-length 0 temporary\r");
+        app.tick_runner();
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            b"screen-length 0 temporary\r",
+            "pager is one-shot"
+        );
+    }
+
+    #[test]
+    fn regression_blank_saved_username_uses_credential_username() {
+        let mut app = test_app();
+        let _release = hold_connection_workers(&mut app);
+        app.db
+            .upsert_credential("fixture-credential", Some("fixture-user"), "password", &[])
+            .unwrap();
+        let mut saved = saved_ssh(&app.db, "Huawei", None);
+        saved.protocol = "telnet".into();
+        saved.username = Some(String::new());
+        saved.credential_ref = Some("fixture-credential".into());
+        app.open_saved(&saved);
+        let request = &app.queued_connections.back().expect("queued").request;
+        assert!(
+            matches!(&request.origin, Origin::Telnet(spec) if spec.username.as_deref() == Some("fixture-user")),
+            "empty saved username must not hide the credential username"
+        );
+        app.open_saved(&saved);
+        assert_eq!(
+            app.sessions.len(),
+            1,
+            "second device click must reuse the opening tab"
+        );
+        assert_eq!(app.queued_connections.len(), 1);
     }
 
     #[test]

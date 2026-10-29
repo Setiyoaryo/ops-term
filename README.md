@@ -21,11 +21,11 @@ Both **x86_64** and **aarch64/ARM64** have a native binary, `.AppImage`, and por
 This is not a promise for musl/Alpine, 32-bit Linux, older glibc or an untested GPU.
 The current egui interface, local shell, SSH tools and GNS3 integration are retained.
 
-For example, on an x86_64 machine after downloading the v0.1.9 AppImage:
+For example, on an x86_64 machine after downloading the v0.1.10 AppImage:
 
 ```bash
-chmod +x opsterm-egui-0.1.9-linux-x86_64.AppImage
-./opsterm-egui-0.1.9-linux-x86_64.AppImage
+chmod +x opsterm-egui-0.1.10-linux-x86_64.AppImage
+./opsterm-egui-0.1.10-linux-x86_64.AppImage
 ```
 
 If FUSE is unavailable, add `--appimage-extract-and-run`. AppImage updates verify a
@@ -145,6 +145,14 @@ the background. Clicking an open device focuses its existing tab. Right-click
 and choose **Open in new tab** for a separate connection. Closing a pending tab
 discards its eventual connection result. Network/authentication time still
 depends on the server.
+
+Telnet startup waits for recognized login prompts, including colored/fragmented
+prompts and spaces before the colon. Pager setup waits until configured answers
+are delivered, their output is processed, and a live vendor CLI prompt is visible.
+Huawei uses `screen-length 0 temporary`. The command is one-shot and is skipped
+after 60 seconds without a ready prompt, on disconnection, or if a startup script
+fails. Password-change prompts are left to the user; failed credentials are never
+retried automatically. See [startup verification](docs/telnet-startup-2026-10-29.md).
 
 Saved inventory credentials are used automatically for SSH/Telnet. Linux secrets
 are persisted in the desktop Secret Service (GNOME Keyring/KWallet), using an

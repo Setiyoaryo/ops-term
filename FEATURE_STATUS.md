@@ -1,5 +1,7 @@
 # Feature Status
 
+29 Oktober 2026 — v0.1.10: login Telnet mengenali prompt berwarna/terpotong dan spasi sebelum titik dua; pager Huawei menunggu kredensial serta prompt CLI, dengan batas urutan output untuk menghindari banner lama. Double-click dan credential tersimpan diuji pada koneksi loopback nyata. [Bukti pengujian](docs/telnet-startup-2026-10-29.md).
+
 28 Oktober 2026 — v0.1.9: dialog konfirmasi tutup dirapikan dengan hierarki teks, panel nama sesi, ikon vektor, padding lebih lega dan tombol destruktif solid. Fokus awal Cancel serta kebijakan sesi aktif tetap dipertahankan.
 
 28 Oktober 2026 — v0.1.8: arah auto-scroll seleksi diperbaiki dan diuji dengan drag/hold/copy ke scrollback. Pencatatan otomatis tanpa isi terminal ditambahkan untuk menelusuri freeze acak; penyebab freeze belum terkonfirmasi. [Bukti dan batasan](docs/scroll-selection-and-stalls-2026-10-28.md).
@@ -49,7 +51,7 @@ Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia d
 | Tools | SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping · traceroute · DNS | Implemented |
 | Session | Workspace save/restore · auto-reconnect · bell + desktop notification | Implemented |
 | Look | macOS-style menu bar · 4 UI themes · font family/weight + zoom · 4 text palettes · brightness + preview | Implemented |
-| Tests | 141 egui tests + native GUI smoke (local PTY, tabs, composer, appearance, agent image paste, close confirmation, GNS3 Telnet) | Tested |
+| Tests | 147 egui tests + native GUI smoke (local PTY, tabs, composer, appearance, agent image paste, close confirmation, GNS3 Telnet) | Tested |
 
 
 Legend: **Planned** · **In Progress** · **Implemented** (works, tests pass) ·

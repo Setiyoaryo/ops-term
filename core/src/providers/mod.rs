@@ -41,6 +41,18 @@ pub trait ConnectionProvider: Send + Sync {
     fn has_running_command(&self) -> bool {
         true
     }
+    /// Whether configured automatic credential answers are still pending.
+    /// False does not prove authentication succeeded: post-login automation must
+    /// also observe a real CLI prompt. UI adapters must cache worker results.
+    fn is_authenticating(&self) -> bool {
+        false
+    }
+    /// Decoded reader-byte position through the output that triggered the final
+    /// configured credential answer. Process at least this much output before
+    /// interpreting a CLI prompt. None means no automatic-login barrier.
+    fn authentication_output_barrier(&self) -> Option<u64> {
+        None
+    }
     /// Send a serial break if the transport supports it. Default: unsupported.
     fn send_break(&self) -> AppResult<()> {
         Err(AppError::Validation(

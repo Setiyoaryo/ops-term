@@ -3,7 +3,7 @@ use opsterm_core::domain::TerminalDimensions;
 use opsterm_core::error::{AppError, AppResult};
 use opsterm_core::providers::ConnectionProvider;
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +14,8 @@ const MAX_PENDING_BYTES: usize = 1024 * 1024;
 struct Shared {
     alive: AtomicBool,
     busy: AtomicBool,
+    authenticating: AtomicBool,
+    authentication_barrier: AtomicU64,
     closed: AtomicBool,
     bytes: AtomicUsize,
     error: Mutex<Option<String>>,
@@ -116,6 +118,15 @@ impl ConnectionProvider for Responsive {
     fn is_alive(&self) -> bool {
         self.status.0.alive.load(Ordering::Acquire)
     }
+    fn is_authenticating(&self) -> bool {
+        self.status.0.authenticating.load(Ordering::Acquire)
+    }
+    fn authentication_output_barrier(&self) -> Option<u64> {
+        match self.status.0.authentication_barrier.load(Ordering::Acquire) {
+            0 => None,
+            position => Some(position),
+        }
+    }
     fn has_running_command(&self) -> bool {
         self.status.0.bytes.load(Ordering::Acquire) > 0
             || self.status.0.busy.load(Ordering::Acquire)
@@ -148,6 +159,8 @@ pub fn responsive(
     let status = Status(Arc::new(Shared {
         alive: AtomicBool::new(true),
         busy: AtomicBool::new(true),
+        authenticating: AtomicBool::new(true),
+        authentication_barrier: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         bytes: AtomicUsize::new(0),
         error: Mutex::new(None),
@@ -183,6 +196,14 @@ pub fn responsive(
                 break;
             }
             if !worker.is_alive() { break; }
+            // Sample phase first: observing completion acquires its final watermark.
+            // Publish that watermark before allowing the UI to see phase=false.
+            let authenticating = worker.is_authenticating();
+            let barrier = worker.authentication_output_barrier().unwrap_or(0);
+            state.0.authentication_barrier.store(barrier, Ordering::Release);
+            if state.0.authenticating.swap(authenticating, Ordering::AcqRel) != authenticating {
+                state.0.wake.request();
+            }
             let busy = worker.has_running_command() || std::time::Instant::now() < settle_until;
             if state.0.busy.swap(busy, Ordering::AcqRel) != busy {
                 state.0.wake.request();
@@ -290,6 +311,67 @@ mod tests {
         assert!(
             started.recv_timeout(Duration::from_millis(200)).is_err(),
             "queued input was sent after close"
+        );
+    }
+
+    struct AuthenticationProbe(Arc<AtomicBool>, Arc<std::sync::atomic::AtomicU64>);
+    impl ConnectionProvider for AuthenticationProbe {
+        fn write(&self, _: &[u8]) -> AppResult<()> {
+            Ok(())
+        }
+        fn resize(&self, _: TerminalDimensions) -> AppResult<()> {
+            Ok(())
+        }
+        fn kill(&self) -> AppResult<()> {
+            Ok(())
+        }
+        fn take_reader(&self) -> AppResult<Box<dyn Read + Send>> {
+            Ok(Box::new(std::io::empty()))
+        }
+        fn is_alive(&self) -> bool {
+            true
+        }
+        fn is_authenticating(&self) -> bool {
+            let pending = self.0.load(Ordering::Acquire);
+            if !pending {
+                self.1.store(47, Ordering::Release);
+            }
+            pending
+        }
+        fn authentication_output_barrier(&self) -> Option<u64> {
+            match self.1.load(Ordering::Acquire) {
+                0 => None,
+                value => Some(value),
+            }
+        }
+    }
+
+    #[test]
+    fn caches_authentication_phase_without_querying_transport_on_ui() {
+        let pending = Arc::new(AtomicBool::new(true));
+        let (provider, _) = responsive(Box::new(AuthenticationProbe(
+            pending.clone(),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        )))
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(
+            provider.is_authenticating(),
+            "automatic credentials still pending"
+        );
+        pending.store(false, Ordering::Release);
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while provider.is_authenticating() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "authentication cache did not refresh"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            provider.authentication_output_barrier(),
+            Some(47),
+            "publish cached output watermark before authentication completes"
         );
     }
 

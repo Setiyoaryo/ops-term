@@ -4362,12 +4362,13 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "uuid",
+ "vte",
  "zeroize",
 ]
 
 [[package]]
 name = "opsterm-egui"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "alacritty_terminal",
  "arboard",
