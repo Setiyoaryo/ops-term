@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -45,6 +45,7 @@ pub struct Available {
     pub asset_key: String,
     pub asset: Asset,
     pub rebuilt: bool,
+    pub installed_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,8 +184,7 @@ impl Updater {
         self.message = format!("Downloading and verifying v{}…", available.version);
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let result = download_and_verify(&available)
-                .and_then(|bytes| install_bytes(&executable, &bytes));
+            let result = install_available(&executable, &available);
             let _ = tx.send(result);
         });
         self.install_rx = Some(rx);
@@ -197,7 +197,12 @@ impl Updater {
                 Ok(Ok(Some(available))) => {
                     self.checking = false;
                     self.last_check = Some(Instant::now());
-                    self.message = format!("Update v{} is available.", available.version);
+                    self.installed = available.installed_path.clone();
+                    self.message = if self.installed.is_some() {
+                        "Update already installed. Restart OpsTerm to use it.".into()
+                    } else {
+                        format!("Update v{} is available.", available.version)
+                    };
                     self.available = Some(available);
                     self.error = None;
                     self.show = true;
@@ -508,7 +513,14 @@ fn check_remote(url: &str) -> Result<Option<Available>, String> {
         return Ok(None);
     }
     let rebuilt = remote == current;
-    if rebuilt && installed_matches(&asset) {
+    let executable = crate::distribution::executable_path()?;
+    let installed_path =
+        installed_distribution_matches(&executable, &asset, &key).then_some(executable);
+    if rebuilt
+        && installed_path
+            .as_deref()
+            .is_some_and(|path| crate::distribution::validate_install_target(path).is_ok())
+    {
         return Ok(None);
     }
     Ok(Some(Available {
@@ -517,27 +529,67 @@ fn check_remote(url: &str) -> Result<Option<Available>, String> {
         asset_key: key,
         asset,
         rebuilt,
+        installed_path,
     }))
 }
 
-fn installed_matches(asset: &Asset) -> bool {
-    let Ok(executable) = crate::distribution::executable_path() else {
-        return false;
-    };
-    installed_path_matches(&executable, asset)
+// Compare the opened file and the final directory entry as well as its bytes:
+// a symlink or concurrent atomic replacement must not masquerade as installed.
+fn same_file(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return false;
+        }
+    }
+    before.is_file()
+        && after.is_file()
+        && before.len() == after.len()
+        && before.modified().ok() == after.modified().ok()
 }
 
 fn installed_path_matches(executable: &Path, asset: &Asset) -> bool {
-    let Ok(metadata) = fs::metadata(executable) else {
-        return false;
+    let matches = || -> Option<bool> {
+        let before = fs::symlink_metadata(executable).ok()?;
+        if !before.is_file() || before.len() != asset.size {
+            return Some(false);
+        }
+        let mut file = fs::File::open(executable).ok()?;
+        if !same_file(&before, &file.metadata().ok()?) {
+            return Some(false);
+        }
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        let mut total = 0u64;
+        loop {
+            let count = file.read(&mut buffer).ok()?;
+            if count == 0 {
+                break;
+            }
+            total += count as u64;
+            if total > asset.size {
+                return Some(false);
+            }
+            digest.update(&buffer[..count]);
+        }
+        Some(
+            total == asset.size
+                && hex::encode(digest.finalize()).eq_ignore_ascii_case(&asset.sha256)
+                && same_file(&before, &file.metadata().ok()?)
+                && same_file(&before, &fs::symlink_metadata(executable).ok()?),
+        )
     };
-    if metadata.len() != asset.size {
-        return false;
-    }
-    let Ok(bytes) = fs::read(executable) else {
-        return false;
-    };
-    hex::encode(Sha256::digest(bytes)).eq_ignore_ascii_case(&asset.sha256)
+    matches().unwrap_or(false)
+}
+
+fn installed_distribution_matches(executable: &Path, asset: &Asset, key: &str) -> bool {
+    let mut header = [0u8; 11];
+    fs::File::open(executable)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok()
+        && validate_executable_format(&header, key).is_ok()
+        && installed_path_matches(executable, asset)
 }
 
 fn validate_asset(asset: &Asset) -> Result<(), String> {
@@ -648,9 +700,7 @@ pub fn cli(args: &[String]) -> Option<i32> {
                     return Some(2);
                 }
             };
-            match download_and_verify(&available)
-                .and_then(|bytes| install_bytes(&executable, &bytes))
-            {
+            match install_available(&executable, &available) {
                 Ok(path) => {
                     println!("installed {}", path.display());
                     Some(0)
@@ -668,7 +718,82 @@ pub fn cli(args: &[String]) -> Option<i32> {
     }
 }
 
+// Keep the lock file: unlinking it would allow a third installer to lock a
+// different inode while an earlier waiter still holds the original lock file.
+fn installation_lock(executable: &Path) -> Result<fs::File, String> {
+    let name = executable
+        .file_name()
+        .ok_or("update target has no file name")?;
+    let lock_path = executable.with_file_name(format!(".{}.update.lock", name.to_string_lossy()));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&lock_path) {
+        if !metadata.is_file() {
+            return Err("update lock must be a regular file, not a symlink".into());
+        }
+    }
+    let lock = options
+        .open(&lock_path)
+        .map_err(|error| format!("cannot open update lock: {error}"))?;
+    let metadata = fs::symlink_metadata(&lock_path)
+        .map_err(|error| format!("cannot inspect update lock: {error}"))?;
+    if !same_file(
+        &metadata,
+        &lock.metadata().map_err(|error| error.to_string())?,
+    ) {
+        return Err("update lock changed while opening it".into());
+    }
+    lock.try_lock()
+        .map_err(|_| "Another update is in progress. Try again when it finishes.".to_string())?;
+    Ok(lock)
+}
+
+fn install_available(executable: &Path, available: &Available) -> Result<PathBuf, String> {
+    validate_asset(&available.asset)?;
+    verify_signature(
+        &available.version.to_string(),
+        &available.asset_key,
+        &available.asset,
+        &parse_public_key(public_key_text())?,
+    )?;
+    let _lock = installation_lock(executable)?;
+    // Another instance may have finished between checking and clicking Install.
+    if installed_distribution_matches(executable, &available.asset, &available.asset_key) {
+        return Ok(executable.to_path_buf());
+    }
+    crate::distribution::validate_install_target(executable)?;
+    let bytes = download_and_verify(available)?;
+    install_bytes_unlocked(executable, &bytes, || {
+        crate::distribution::validate_install_target(executable)
+    })
+}
+
+#[cfg(test)]
 fn install_bytes(executable: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+    let _lock = installation_lock(executable)?;
+    install_bytes_unlocked(executable, bytes, || Ok(()))
+}
+
+fn install_bytes_unlocked(
+    executable: &Path,
+    bytes: &[u8],
+    validate_target: impl Fn() -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    validate_target()?;
+    let asset = Asset {
+        url: String::new(),
+        size: bytes.len() as u64,
+        sha256: hex::encode(Sha256::digest(bytes)),
+        signature: String::new(),
+    };
+    if installed_path_matches(executable, &asset) {
+        return Ok(executable.to_path_buf());
+    }
     let metadata = fs::symlink_metadata(executable)
         .map_err(|error| format!("cannot inspect the running executable: {error}"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -706,6 +831,16 @@ fn install_bytes(executable: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
     }
     drop(file);
 
+    if let Err(error) = validate_target().and_then(|()| {
+        if fs::symlink_metadata(executable).is_ok_and(|current| same_file(&metadata, &current)) {
+            Ok(())
+        } else {
+            Err("Installed executable changed. Reopen OpsTerm and check for updates again.".into())
+        }
+    }) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
     let _ = fs::remove_file(&backup);
     if let Err(error) = fs::hard_link(executable, &backup) {
         let _ = fs::remove_file(&temporary);
@@ -723,6 +858,17 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
+    fn test_directory(name: &str) -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "opsterm-update-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        root
+    }
+
     fn signed_asset(version: &str, key: &str, bytes: &[u8]) -> (Asset, VerifyingKey) {
         let signing = SigningKey::from_bytes(&[7u8; 32]);
         let hash = hex::encode(Sha256::digest(bytes));
@@ -735,6 +881,157 @@ mod tests {
         let signature = signing.sign(canonical(version, key, &asset).as_bytes());
         asset.signature = BASE64.encode(signature.to_bytes());
         (asset, signing.verifying_key())
+    }
+
+    #[test]
+    fn check_result_already_installed_becomes_pending_restart() {
+        let mut updater = Updater::new();
+        let (tx, rx) = channel();
+        let (asset, _) = signed_asset("99.0.0", "linux-x86_64", b"\x7fELFfixture");
+        let installed = PathBuf::from("/tmp/opsterm-installed-fixture");
+        tx.send(Ok(Some(Available {
+            version: Version::parse("99.0.0").unwrap(),
+            notes: String::new(),
+            asset_key: "linux-x86_64".into(),
+            asset,
+            rebuilt: false,
+            installed_path: Some(installed.clone()),
+        })))
+        .unwrap();
+        updater.checking = true;
+        updater.check_rx = Some(rx);
+        assert!(updater.poll());
+        assert_eq!(
+            updater.installed,
+            Some(installed),
+            "known installed asset must offer restart instead of another install"
+        );
+        assert!(updater.error.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn already_installed_detection_rejects_file_symlinks() {
+        let root =
+            std::env::temp_dir().join(format!("opsterm-update-link-match-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let bytes = b"\x7fELFfixture";
+        let (asset, _) = signed_asset("99.0.0", "linux-x86_64", bytes);
+        fs::write(root.join("real"), bytes).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        assert!(
+            !installed_path_matches(&root.join("link"), &asset),
+            "symlink must not bypass installer safeguards through already-installed detection"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installing_identical_bytes_does_not_replace_inode_or_rollback() {
+        use std::os::unix::fs::MetadataExt;
+        let root =
+            std::env::temp_dir().join(format!("opsterm-update-idempotent-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let executable = root.join("opsterm");
+        let bytes = b"\x7fELFfixture";
+        fs::write(&executable, bytes).unwrap();
+        let before = fs::metadata(&executable).unwrap().ino();
+        install_bytes(&executable, bytes).unwrap();
+        assert_eq!(
+            fs::metadata(&executable).unwrap().ino(),
+            before,
+            "an already installed payload must not be rewritten"
+        );
+        assert!(!root.join(".opsterm.old").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installer_refuses_another_in_progress_update() {
+        let root =
+            std::env::temp_dir().join(format!("opsterm-update-locked-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let executable = root.join("opsterm");
+        fs::write(&executable, b"\x7fELFold").unwrap();
+        let lock = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join(".opsterm.update.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let result = install_bytes(&executable, b"\x7fELFnew");
+        assert!(
+            result.is_err(),
+            "parallel installers must not race to replace the artifact"
+        );
+        assert_eq!(fs::read(&executable).unwrap(), b"\x7fELFold");
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installer_refuses_symlink_lock_without_touching_target() {
+        let root = test_directory("lock-symlink");
+        let executable = root.join("opsterm");
+        let other = root.join("other");
+        fs::write(&executable, b"old").unwrap();
+        fs::write(&other, b"unrelated").unwrap();
+        std::os::unix::fs::symlink(&other, root.join(".opsterm.update.lock")).unwrap();
+        assert!(install_bytes(&executable, b"new").is_err());
+        assert_eq!(fs::read(&executable).unwrap(), b"old");
+        assert_eq!(fs::read(&other).unwrap(), b"unrelated");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn target_changed_during_install_is_not_overwritten() {
+        use std::cell::Cell;
+        let root = test_directory("changed-during-install");
+        let executable = root.join("opsterm");
+        fs::write(&executable, b"old").unwrap();
+        let calls = Cell::new(0);
+        let result = install_bytes_unlocked(&executable, b"new verified payload", || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                let replacement = root.join("replacement");
+                fs::write(&replacement, b"external update").unwrap();
+                fs::rename(replacement, &executable).unwrap();
+                return Err("external replacement".into());
+            }
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&executable).unwrap(), b"external update");
+        assert!(!root.join(".opsterm.old").exists());
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".new.")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn known_installed_hash_still_requires_matching_distribution_format() {
+        let root = test_directory("installed-format");
+        let executable = root.join("opsterm");
+        let image = b"\x7fELF\0\0\0\0AI\x02image payload";
+        fs::write(&executable, image).unwrap();
+        let (asset, _) = signed_asset("99.0.0", "linux-x86_64", image);
+        assert!(!installed_distribution_matches(
+            &executable,
+            &asset,
+            "linux-x86_64"
+        ));
+        assert!(installed_distribution_matches(
+            &executable,
+            &asset,
+            "linux-x86_64-appimage"
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -6503,20 +6503,24 @@ impl App {
                 }
                 if let Some(available) = &updater.available {
                     ui.add_space(6.0);
-                    let title = if available.rebuilt {
+                    let title = if updater.installed.is_some() {
+                        format!("Version {} is installed", available.version)
+                    } else if available.rebuilt {
                         format!("New build of v{} is available", available.version)
                     } else {
                         format!("Version {} is available", available.version)
                     };
                     ui.label(egui::RichText::new(title).strong().color(text_c()));
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Download size: {:.1} MiB",
-                            available.asset.size as f64 / 1_048_576.0
-                        ))
-                        .small()
-                        .color(muted()),
-                    );
+                    if updater.installed.is_none() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Download size: {:.1} MiB",
+                                available.asset.size as f64 / 1_048_576.0
+                            ))
+                            .small()
+                            .color(muted()),
+                        );
+                    }
                     if !available.notes.trim().is_empty() {
                         egui::ScrollArea::vertical()
                             .max_height(140.0)
@@ -6652,6 +6656,7 @@ fn data_dir() -> std::path::PathBuf {
 fn main() -> eframe::Result<()> {
     #[cfg(target_os = "linux")]
     std::env::set_var("MALLOC_ARENA_MAX", "2");
+    distribution::initialize();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(code) = update::cli(&args) {
         std::process::exit(code);

@@ -21,11 +21,11 @@ Both **x86_64** and **aarch64/ARM64** have a native binary, `.AppImage`, and por
 This is not a promise for musl/Alpine, 32-bit Linux, older glibc or an untested GPU.
 The current egui interface, local shell, SSH tools and GNS3 integration are retained.
 
-For example, on an x86_64 machine after downloading the v0.1.10 AppImage:
+For example, on an x86_64 machine after downloading the v0.1.11 AppImage:
 
 ```bash
-chmod +x opsterm-egui-0.1.10-linux-x86_64.AppImage
-./opsterm-egui-0.1.10-linux-x86_64.AppImage
+chmod +x opsterm-egui-0.1.11-linux-x86_64.AppImage
+./opsterm-egui-0.1.11-linux-x86_64.AppImage
 ```
 
 If FUSE is unavailable, add `--appimage-extract-and-run`. AppImage updates verify a

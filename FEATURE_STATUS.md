@@ -1,5 +1,7 @@
 # Feature Status
 
+29 Oktober 2026 — v0.1.11: updater menyimpan lokasi executable saat startup, mengenali pembaruan terverifikasi yang sudah terpasang sebagai perlu restart, serta menolak perubahan target yang tidak dikenal dan installer bersamaan. [Bukti pengujian](docs/updater-replaced-executable-2026-10-29.md).
+
 29 Oktober 2026 — v0.1.10: login Telnet mengenali prompt berwarna/terpotong dan spasi sebelum titik dua; pager Huawei menunggu kredensial serta prompt CLI, dengan batas urutan output untuk menghindari banner lama. Double-click dan credential tersimpan diuji pada koneksi loopback nyata. [Bukti pengujian](docs/telnet-startup-2026-10-29.md).
 
 28 Oktober 2026 — v0.1.9: dialog konfirmasi tutup dirapikan dengan hierarki teks, panel nama sesi, ikon vektor, padding lebih lega dan tombol destruktif solid. Fokus awal Cancel serta kebijakan sesi aktif tetap dipertahankan.

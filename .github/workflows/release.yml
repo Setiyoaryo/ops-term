@@ -103,6 +103,9 @@ jobs:
       - name: Verify real signed AppImage replacement and rollback
         if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         run: python3 scripts/build_guard.py -- python3 scripts/smoke-appimage-update.py target/release/opsterm-egui --key "$RUNNER_TEMP/opsterm-signing.key"
+      - name: Verify signed native updates with a live replaced executable
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        run: python3 scripts/build_guard.py -- xvfb-run -a python3 scripts/smoke-native-update.py target/release/opsterm-egui --key "$RUNNER_TEMP/opsterm-signing.key" --output "$RUNNER_TEMP/native-update"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-${{ matrix.arch }}
