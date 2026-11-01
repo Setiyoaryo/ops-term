@@ -21,11 +21,11 @@ Both **x86_64** and **aarch64/ARM64** have a native binary, `.AppImage`, and por
 This is not a promise for musl/Alpine, 32-bit Linux, older glibc or an untested GPU.
 The current egui interface, local shell, SSH tools and GNS3 integration are retained.
 
-For example, on an x86_64 machine after downloading the v0.1.11 AppImage:
+For example, on an x86_64 machine after downloading the v0.1.12 AppImage:
 
 ```bash
-chmod +x opsterm-egui-0.1.11-linux-x86_64.AppImage
-./opsterm-egui-0.1.11-linux-x86_64.AppImage
+chmod +x opsterm-egui-0.1.12-linux-x86_64.AppImage
+./opsterm-egui-0.1.12-linux-x86_64.AppImage
 ```
 
 If FUSE is unavailable, add `--appimage-extract-and-run`. AppImage updates verify a
@@ -94,7 +94,7 @@ runbooks (expect) · auto pager-disable & auto login/enable · logging per sessi
 (`0600`) · keyword highlight (editable) + find · scratchpad · double-click
 copy · SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping ·
 traceroute · DNS · workspace save/restore · auto-reconnect · 4 UI themes · selectable terminal fonts and text palettes · font
-zoom · output export.
+zoom · output export · encrypted backup export (optional credential secrets).
 
 Keyboard: `Ctrl+=`/`Ctrl+-`/`Ctrl+0` zoom · `Ctrl+Shift+C` or `Ctrl+Insert`
 copy · `Ctrl+C` copy (with a selection) or ETX · `Ctrl+Shift+A` select all ·
@@ -109,10 +109,11 @@ edit **Console application command for Telnet** and enter the installed executab
 absolute path followed by:
 
 ```text
-/home/portego/.local/bin/opsterm-egui --telnet "{host}" --port {port} --title "{name}"
+/home/<user>/.local/bin/opsterm-egui --telnet "{host}" --port {port} --title "{name}"
 ```
 
-Replace `/home/portego` with your home directory on other machines. GNS3 replaces
+Replace `<user>` with your username on this machine (for example
+`/home/alice`). GNS3 replaces
 these placeholders when you open a node's console. Each launch opens a separate
 OpsTerm window with one named Telnet tab and no extra local shell; it does not
 reuse an existing window or add devices to the saved inventory. The GNS3 server
@@ -120,6 +121,17 @@ address and console port must be reachable from this computer. This uses OpsTerm
 built-in Telnet transport; no external `telnet` executable is required. VNC console
 settings are separate and continue using your VNC viewer. Without command arguments,
 OpsTerm still opens Local Shell. Use `opsterm-egui --help` for console options.
+
+### Encrypted backup export
+
+**File → Export encrypted backup…** writes one password-protected file to
+`~/.local/share/org.opsterm.app/exports/` (or `$XDG_DATA_HOME/org.opsterm.app/exports/`).
+It contains devices, folders, commands, workspaces, runbooks, settings and —
+when the option is selected — credential secrets. The payload is encrypted with
+AES-256-GCM using an Argon2id-derived key; the backup password is never stored,
+so a forgotten password means the file cannot be recovered. The file is created
+with mode `0600`. Unlock the credential vault first if you want to include
+secrets.
 
 Clipboard images: with a CLI agent such as Codex in the terminal, `Ctrl+V`
 forwards its image-paste shortcut (`0x16`) when the clipboard has no text.

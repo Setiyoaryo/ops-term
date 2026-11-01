@@ -5,6 +5,7 @@
 //! SQLite storage, logging, credentials, tunnels and SFTP.
 
 pub mod askpass;
+pub mod backup;
 pub mod credential;
 pub mod domain;
 pub mod error;

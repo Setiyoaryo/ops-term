@@ -22,7 +22,7 @@ The actual user GNS3 project/router console was not operated; verification used 
 - Public latest release: https://github.com/Setiyoaryo/ops-term/releases/tag/v0.1.4 — complete, non-draft, four signed/versioned assets.
 - CI: https://github.com/Setiyoaryo/ops-term/actions/runs/40429838937 — success.
 - Release: https://github.com/Setiyoaryo/ops-term/actions/runs/40429841461 — success, including release-profile Rust tests, clippy, signed packaging and manifest verification.
-- Installed through the existing trusted v0.1.3 updater using the versioned HTTPS manifest. `/home/portego/.local/bin/opsterm-egui --version` reports `OpsTerm v0.1.4`; the normal stable feed check reports up to date.
+- Installed through the existing trusted v0.1.3 updater using the versioned HTTPS manifest. `~/.local/bin/opsterm-egui --version` reports `OpsTerm v0.1.4`; the normal stable feed check reports up to date.
 - Installed SHA-256 independently matches the signed public manifest: `e8769a83e921ff6ddc170d3a52ec78927544ea2d96c0bd6b43ab6af06ec60fc0`.
 - Re-ran the native GNS3 console smoke against the **installed release binary**, successfully. Screenshots visually inspected again; artifacts are `/tmp/opsterm-release-0.1.4-gns3/` and its `.log` sibling.
 - Also inspected the installed native GNS3 console launcher: it substitutes these same placeholders and launches argv directly on Linux. Its settings and projects were not modified.

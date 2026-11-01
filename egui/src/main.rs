@@ -21,6 +21,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use opsterm_core::backup;
 use opsterm_core::domain::{
     Command, Folder, FolderInput, Runbook, RunbookInput, SavedSession, SavedSessionInput,
     SerialSpec, SshSpec, TelnetSpec, TerminalDimensions, Workspace, WorkspaceInput,
@@ -1004,6 +1005,12 @@ struct App {
     import_open: bool,
     import_text: String,
     import_msg: String,
+    export_open: bool,
+    export_password: String,
+    export_confirm: String,
+    export_include_secrets: bool,
+    export_msg: Option<String>,
+    export_error: Option<String>,
     search: String,
     search_open: bool,
     tunnels: TunnelManager,
@@ -1157,6 +1164,12 @@ impl App {
             import_open: false,
             import_text: String::new(),
             import_msg: String::new(),
+            export_open: false,
+            export_password: String::new(),
+            export_confirm: String::new(),
+            export_include_secrets: true,
+            export_msg: None,
+            export_error: None,
             search: String::new(),
             search_open: false,
             tunnels: TunnelManager::new(),
@@ -3532,6 +3545,205 @@ impl App {
         }
     }
 
+    fn export_backup(&mut self) {
+        self.export_error = None;
+        self.export_msg = None;
+        let password = self.export_password.clone();
+        if password != self.export_confirm {
+            self.export_error = Some("Backup password confirmation does not match".into());
+            return;
+        }
+        if password.chars().count() < 8 {
+            self.export_error = Some("Backup password must be at least 8 characters".into());
+            return;
+        }
+        let include_secrets = self.export_include_secrets;
+        if include_secrets && vault::is_initialized() && self.vault.is_none() {
+            self.export_error = Some(
+                "Unlock the credential vault first, or export without credential secrets.".into(),
+            );
+            return;
+        }
+
+        let result = (|| -> opsterm_core::error::AppResult<(std::path::PathBuf, usize, usize)> {
+            let sessions = self.db.list_sessions()?;
+            let folders = self.db.list_folders()?;
+            let commands = self.db.list_commands()?;
+            let workspaces = self.db.list_workspaces()?;
+            let runbooks = self.db.list_runbooks()?;
+            let settings = self.db.load_settings()?;
+            let records = self.db.list_credentials()?;
+            let mut credentials = Vec::with_capacity(records.len());
+            let mut included = 0;
+            let mut missing = 0;
+            for record in records {
+                let secret = if include_secrets {
+                    self.vault
+                        .as_ref()
+                        .and_then(|unlocked| unlocked.get_secret(&record.name))
+                        .or_else(|| opsterm_core::credential::get(&record.name).ok())
+                } else {
+                    None
+                };
+                if include_secrets {
+                    if secret.is_some() {
+                        included += 1;
+                    } else {
+                        missing += 1;
+                    }
+                }
+                credentials.push(serde_json::json!({
+                    "name": record.name,
+                    "username": record.username,
+                    "kind": record.kind,
+                    "tags": record.tags,
+                    "createdAt": record.created_at,
+                    "updatedAt": record.updated_at,
+                    "secret": secret,
+                }));
+            }
+            let payload = serde_json::json!({
+                "schemaVersion": backup::BACKUP_VERSION,
+                "createdAt": opsterm_core::domain::now_iso(),
+                "appVersion": env!("CARGO_PKG_VERSION"),
+                "containsSecrets": include_secrets,
+                "devices": sessions,
+                "folders": folders,
+                "commands": commands,
+                "workspaces": workspaces,
+                "runbooks": runbooks,
+                "settings": settings,
+                "credentials": credentials,
+            });
+            let document = backup::encrypt_json(&payload, &password, include_secrets)?;
+
+            let dir = data_dir().join("exports");
+            std::fs::create_dir_all(&dir)?;
+            let stamp = chrono_like_timestamp();
+            let mut path = dir.join(format!("opsterm-backup-{stamp}.{}", backup::FILE_EXTENSION));
+            let mut suffix = 1;
+            while path.exists() {
+                path = dir.join(format!(
+                    "opsterm-backup-{stamp}-{suffix}.{}",
+                    backup::FILE_EXTENSION
+                ));
+                suffix += 1;
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&path)?;
+            file.write_all(document.as_bytes())?;
+            file.sync_all()?;
+            Ok((path, included, missing))
+        })();
+
+        match result {
+            Ok((path, included, missing)) => {
+                self.export_password.clear();
+                self.export_confirm.clear();
+                let mut message = format!("Encrypted backup written to {}", path.display());
+                if include_secrets {
+                    message.push_str(&format!(" · {included} credential secret(s) included"));
+                    if missing > 0 {
+                        message.push_str(&format!(
+                            ", {missing} unavailable (no vault or keyring secret)"
+                        ));
+                    }
+                } else {
+                    message.push_str(" · no credential secrets");
+                }
+                self.flash = message.clone();
+                self.export_msg = Some(message);
+                self.export_open = false;
+            }
+            Err(error) => self.export_error = Some(error.to_string()),
+        }
+    }
+
+    fn export_backup_window(&mut self, ctx: &egui::Context) {
+        if !self.export_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Export encrypted backup")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    "Creates one password-protected file containing devices, folders, \
+                     commands, workspaces, runbooks, settings and — if selected — credential \
+                     secrets. The file is encrypted with AES-256-GCM using an Argon2id key.",
+                );
+                ui.add_space(4.0);
+                ui.checkbox(
+                    &mut self.export_include_secrets,
+                    "Include credential secrets (encrypted)",
+                );
+                if self.export_include_secrets && vault::is_initialized() && self.vault.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Credential vault is locked.")
+                                .small()
+                                .color(Color32::from_rgb(229, 192, 123)),
+                        );
+                        if ui.small_button("Unlock vault…").clicked() {
+                            self.vault_prompt = true;
+                        }
+                    });
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "There is no recovery: without this backup password the file cannot be opened.",
+                    )
+                    .small()
+                    .color(muted()),
+                );
+                ui.add_space(6.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.export_password)
+                        .password(true)
+                        .hint_text("Backup password (min. 8 characters)")
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.export_confirm)
+                        .password(true)
+                        .hint_text("Confirm backup password")
+                        .desired_width(f32::INFINITY),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Export").clicked() {
+                        self.export_backup();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.export_open = false;
+                        self.export_password.clear();
+                        self.export_confirm.clear();
+                        self.export_error = None;
+                    }
+                });
+                if let Some(message) = &self.export_msg {
+                    ui.colored_label(ok(), message);
+                }
+                if let Some(error) = &self.export_error {
+                    ui.colored_label(Color32::from_rgb(224, 108, 117), error);
+                }
+            });
+        if !open {
+            self.export_open = false;
+            self.export_password.clear();
+            self.export_confirm.clear();
+            self.export_error = None;
+        }
+    }
+
     fn run_dns(&mut self) {
         let host = self.dns_host.trim().to_string();
         if host.is_empty() {
@@ -4661,6 +4873,14 @@ impl App {
                         }
                         if ui.button("Import devices").clicked() {
                             self.import_open = true;
+                            ui.close();
+                        }
+                        if ui.button("Export encrypted backup…").clicked() {
+                            self.export_open = true;
+                            self.export_error = None;
+                            self.export_msg = None;
+                            self.export_password.clear();
+                            self.export_confirm.clear();
                             ui.close();
                         }
                         if ui.button("Workspaces").clicked() {
@@ -6421,6 +6641,7 @@ impl App {
         self.credentials_window(ctx);
         self.credential_delete_dialog(ctx);
         self.vault_prompt_dialog(ctx);
+        self.export_backup_window(ctx);
         self.folder_picker_window(ctx);
         self.draw_toast(ctx);
         if ctx.input(|i| i.is_scrolling()) {
@@ -6764,6 +6985,27 @@ mod tests {
         app.vault_prompt = false;
         app.active = 0;
         app
+    }
+
+    #[test]
+    fn backup_export_validates_the_password_before_writing() {
+        let mut app = test_app();
+        app.export_include_secrets = false;
+        app.export_password = "short".into();
+        app.export_confirm = "short".into();
+        app.export_backup();
+        assert!(app
+            .export_error
+            .as_deref()
+            .is_some_and(|error| error.contains("8 characters")));
+
+        app.export_password = "correct horse battery".into();
+        app.export_confirm = "different password".into();
+        app.export_backup();
+        assert!(app
+            .export_error
+            .as_deref()
+            .is_some_and(|error| error.contains("does not match")));
     }
 
     fn test_session(reader: impl Read + Send + 'static) -> (Session, Arc<Mutex<Vec<u8>>>) {

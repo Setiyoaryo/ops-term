@@ -1,5 +1,7 @@
 # Feature Status
 
+1 November 2026 — v0.1.12: export backup terenkripsi berisi devices, folder, command, workspace, runbook, settings dan kredensial opsional; payload memakai Argon2id + AES-256-GCM, file `0600`, dan path pribadi dibersihkan dari dokumentasi. [Test backup](core/src/backup.rs).
+
 29 Oktober 2026 — v0.1.11: updater menyimpan lokasi executable saat startup, mengenali pembaruan terverifikasi yang sudah terpasang sebagai perlu restart, serta menolak perubahan target yang tidak dikenal dan installer bersamaan. [Bukti pengujian](docs/updater-replaced-executable-2026-10-29.md).
 
 29 Oktober 2026 — v0.1.10: login Telnet mengenali prompt berwarna/terpotong dan spasi sebelum titik dua; pager Huawei menunggu kredensial serta prompt CLI, dengan batas urutan output untuk menghindari banner lama. Double-click dan credential tersimpan diuji pada koneksi loopback nyata. [Bukti pengujian](docs/telnet-startup-2026-10-29.md).
@@ -49,7 +51,7 @@ Pilihan font monospace, empat palet teks, brightness dan preview kini tersedia d
 | Layout | Tabs (drag-reorder) · Split (drag-resize) · 2×2 grid monitor | Implemented |
 | Devices | Editor (host/port/proto/user/credential/pager/backspace/login) · vendor profiles · import CSV · filter | Implemented |
 | Commands | Library + button bar · broadcast to selected targets · runbooks (expect) · auto pager-disable & auto login/enable | Implemented |
-| Output | Keyword highlight (editable rules) · find · logging per session (`0600`) · scratchpad · double-click copy · select-all · export output | Implemented |
+| Output | Keyword highlight (editable rules) · find · logging per session (`0600`) · scratchpad · double-click copy · select-all · export output · encrypted backup export (optional credential secrets) | Implemented |
 | Tools | SFTP browser · SSH tunnels (L/R/D) · subnet calculator · ping · traceroute · DNS | Implemented |
 | Session | Workspace save/restore · auto-reconnect · bell + desktop notification | Implemented |
 | Look | macOS-style menu bar · 4 UI themes · font family/weight + zoom · 4 text palettes · brightness + preview | Implemented |
