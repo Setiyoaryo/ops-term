@@ -4,6 +4,11 @@
 //! The password is written to a `0600` file inside a `0700` directory and an
 //! `askpass.sh` that prints it is pointed at by `SSH_ASKPASS` with
 //! `SSH_ASKPASS_REQUIRE=force`. Callers remove the directory when done.
+//!
+//! `SSH_ASKPASS_REQUIRE=force` also routes host-key confirmation prompts to the
+//! helper. Answering those with a password silently hangs the client on an
+//! unknown host, so the helper only answers password prompts and fails every
+//! other prompt; OpenSSH then reports the verification failure on the terminal.
 
 use std::path::PathBuf;
 
@@ -33,7 +38,13 @@ pub fn create_askpass(password: &str) -> AppResult<PathBuf> {
         .write(true)
         .mode(0o700)
         .open(&script_path)?;
-    script.write_all(format!("#!/bin/sh\nexec cat '{}'\n", pass_path.display()).as_bytes())?;
+    script.write_all(
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  *assword*) exec cat '{}' ;;\n  *) exit 1 ;;\nesac\n",
+            pass_path.display()
+        )
+        .as_bytes(),
+    )?;
     script.flush()?;
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700))?;
     Ok(dir)
@@ -79,6 +90,30 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&pass).unwrap(), "hunter2");
         assert!(std::fs::read_to_string(&script).unwrap().contains("cat"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn askpass_answers_password_prompts_only() {
+        let dir = create_askpass("hunter2").expect("askpass");
+        let script = dir.join("askpass.sh");
+
+        let password = std::process::Command::new(&script)
+            .arg("root@example.com's password: ")
+            .output()
+            .expect("run askpass");
+        assert!(password.status.success());
+        assert_eq!(password.stdout, b"hunter2");
+
+        // Forced askpass must not answer a host-key confirmation with the
+        // password; OpenSSH would otherwise wait forever on an unknown host.
+        let host_key = std::process::Command::new(&script)
+            .arg("Are you sure you want to continue connecting (yes/no/[fingerprint])? ")
+            .output()
+            .expect("run askpass");
+        assert!(!host_key.status.success());
+        assert!(host_key.stdout.is_empty());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
