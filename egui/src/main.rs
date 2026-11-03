@@ -588,7 +588,10 @@ impl Session {
 
     fn key_bytes(&self, key: egui::Key, modifiers: egui::Modifiers) -> Option<Vec<u8>> {
         if key == egui::Key::Backspace {
-            if modifiers.ctrl || modifiers.command {
+            if cfg!(target_os = "macos") && modifiers.command && !modifiers.ctrl {
+                return Some(vec![0x15]);
+            }
+            if modifiers.ctrl {
                 return Some(vec![0x08]);
             }
             let mut out = Vec::with_capacity(2);
@@ -906,6 +909,7 @@ struct UiSettings {
     #[serde(default = "default_terminal_scroll_speed")]
     terminal_scroll_speed: f32,
     vault_ttl_secs: u64,
+    sidebar_visible: bool,
 }
 
 impl Default for UiSettings {
@@ -919,6 +923,7 @@ impl Default for UiSettings {
             scroll_speed: DEFAULT_SCROLL_SPEED,
             terminal_scroll_speed: DEFAULT_TERMINAL_SCROLL_SPEED,
             vault_ttl_secs: DEFAULT_VAULT_TTL_SECS,
+            sidebar_visible: true,
         }
     }
 }
@@ -998,6 +1003,7 @@ struct App {
     scratch: Vec<String>,
     scratch_input: String,
     show_scratch: bool,
+    show_sidebar: bool,
     highlight: bool,
     broadcast: bool,
     commands: Vec<Command>,
@@ -1157,6 +1163,7 @@ impl App {
             scratch: load_scratch(),
             scratch_input: String::new(),
             show_scratch: false,
+            show_sidebar: true,
             highlight: true,
             broadcast: false,
             commands: Vec::new(),
@@ -1290,6 +1297,7 @@ impl App {
         self.theme_idx = theme_index(&settings.theme);
         set_theme(theme_for(self.theme_idx));
         self.vault_ttl_secs = settings.vault_ttl_secs.max(60);
+        self.show_sidebar = settings.sidebar_visible;
         self.ui_settings = settings;
         self.ui_settings
             .terminal_appearance
@@ -1316,6 +1324,7 @@ impl App {
         self.ui_settings.scroll_speed = self.scroll_speed;
         self.ui_settings.terminal_scroll_speed = self.terminal_scroll_speed;
         self.ui_settings.vault_ttl_secs = self.vault_ttl_secs;
+        self.ui_settings.sidebar_visible = self.show_sidebar;
         let _ = self.db.save_named_setting("ui.egui", &self.ui_settings);
     }
 
@@ -2936,20 +2945,31 @@ impl App {
                             if !(i.modifiers.ctrl || i.modifiers.command) {
                                 // Alt+<printable> is the readline word-motion
                                 // family (Alt+B/F/D...), i.e. ESC-prefixed.
+                                // On macOS the composed text may be a special
+                                // character, so Meta is handled from the key
+                                // event below instead.
                                 if i.modifiers.alt && !i.modifiers.ctrl {
-                                    out.push(0x1b);
+                                    if !cfg!(target_os = "macos") {
+                                        out.push(0x1b);
+                                    }
                                 }
-                                out.extend_from_slice(t.as_bytes());
+                                if !(cfg!(target_os = "macos") && i.modifiers.alt) {
+                                    out.extend_from_slice(t.as_bytes());
+                                }
                             }
                         }
                         egui::Event::Paste(t) => {
                             // On Linux, plain Ctrl+V must reach the application
                             // as 0x16 (vim visual-block, readline quoted-insert).
                             // Paste is Ctrl+Shift+V / Shift+Insert, as in Tabby.
+                            // Recover the modifiers from nearby key events so a
+                            // fast Ctrl press/release still sends 0x16 instead
+                            // of pasting the clipboard.
+                            let modifiers = modifiers_after(&i.events, event_index, i.modifiers);
                             if cfg!(target_os = "linux")
-                                && i.modifiers.ctrl
-                                && !i.modifiers.shift
-                                && !i.modifiers.alt
+                                && modifiers.ctrl
+                                && !modifiers.shift
+                                && !modifiers.alt
                             {
                                 out.push(0x16);
                             } else {
@@ -2963,7 +2983,14 @@ impl App {
                             // egui-winit turns Ctrl+X into Cut on Linux, but a
                             // terminal must deliver 0x18 (vim decrement, emacs
                             // prefix). Selection cutting is not a terminal verb.
-                            out.push(0x18);
+                            // On macOS this is Cmd+X, which edits the selection.
+                            if cfg!(target_os = "macos") {
+                                if sel.is_some() {
+                                    copy = true;
+                                }
+                            } else {
+                                out.push(0x18);
+                            }
                         }
                         egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                             if !(i.modifiers.ctrl || i.modifiers.command) {
@@ -2974,19 +3001,11 @@ impl App {
                             // winit emits Copy instead of a C press. A following
                             // key event (including Ctrl release) retains the event
                             // modifiers even when the frame's final state is empty.
-                            let modifiers = i.events[event_index + 1..]
-                                .iter()
-                                .find_map(|event| {
-                                    if let egui::Event::Key { modifiers, .. } = event {
-                                        Some(*modifiers)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .unwrap_or(i.modifiers);
+                            let modifiers = modifiers_after(&i.events, event_index, i.modifiers);
                             if sel.is_some() {
                                 copy = true;
-                            } else if (modifiers.ctrl || modifiers.command)
+                            } else if !cfg!(target_os = "macos")
+                                && (modifiers.ctrl || modifiers.command)
                                 && !modifiers.shift
                                 && !interrupted
                             {
@@ -3000,19 +3019,33 @@ impl App {
                             modifiers,
                             ..
                         } => {
-                            if (modifiers.ctrl || modifiers.command) && *key == egui::Key::C {
-                                if sel.is_some() || modifiers.shift {
+                            let ctrl_for_terminal = if cfg!(target_os = "macos") {
+                                modifiers.ctrl && !modifiers.command
+                            } else {
+                                modifiers.ctrl || modifiers.command
+                            };
+                            let select_all_key = if cfg!(target_os = "macos") {
+                                modifiers.command && !modifiers.ctrl && *key == egui::Key::A
+                            } else {
+                                (modifiers.ctrl || modifiers.command)
+                                    && modifiers.shift
+                                    && *key == egui::Key::A
+                            };
+                            if ctrl_for_terminal && *key == egui::Key::C {
+                                let copy_selection = if cfg!(target_os = "macos") {
+                                    modifiers.shift && sel.is_some()
+                                } else {
+                                    sel.is_some() || modifiers.shift
+                                };
+                                if copy_selection {
                                     copy = true;
                                 } else if !interrupted {
                                     out.push(0x03);
                                     interrupted = true;
                                 }
-                            } else if (modifiers.ctrl || modifiers.command)
-                                && modifiers.shift
-                                && *key == egui::Key::A
-                            {
-                                // Tabby/xterm convention: Ctrl+Shift+A selects,
-                                // leaving Ctrl+A (0x01) to readline/vim.
+                            } else if select_all_key {
+                                // Tabby/xterm convention: Ctrl+Shift+A selects on
+                                // Linux; macOS uses the native Cmd+A.
                                 select_all = true;
                             } else if modifiers.shift
                                 && matches!(key, egui::Key::PageUp | egui::Key::PageDown)
@@ -3035,6 +3068,8 @@ impl App {
                                 && *key == egui::Key::Insert
                             {
                                 copy = true;
+                            } else if let Some(bytes) = meta_shortcut_bytes(*key, *modifiers) {
+                                out.extend_from_slice(&bytes);
                             } else if let Some(bytes) =
                                 self.sessions[active].key_bytes(*key, *modifiers)
                             {
@@ -4245,6 +4280,14 @@ impl App {
     }
 }
 
+fn primary_key_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Cmd"
+    } else {
+        "Ctrl"
+    }
+}
+
 fn install_fonts(ctx: &egui::Context, terminal_path: Option<&std::path::Path>) {
     let mut defs = egui::FontDefinitions::empty();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -4285,19 +4328,23 @@ fn install_fonts(ctx: &egui::Context, terminal_path: Option<&std::path::Path>) {
                 .insert(0, key.to_owned());
         }
     }
+    append_default_fonts(&mut defs);
+    ctx.set_fonts(defs);
+}
+
+fn append_default_fonts(defs: &mut egui::FontDefinitions) {
     let defaults = egui::FontDefinitions::default();
     for (family, names) in defaults.families {
-        if defs.families.contains_key(&family) {
-            continue;
-        }
-        for name in &names {
-            if let Some(data) = defaults.font_data.get(name) {
-                defs.font_data.insert(name.clone(), data.clone());
+        let entry = defs.families.entry(family).or_default();
+        for name in names {
+            if !entry.contains(&name) {
+                entry.push(name.clone());
+            }
+            if let Some(data) = defaults.font_data.get(&name) {
+                defs.font_data.entry(name).or_insert_with(|| data.clone());
             }
         }
-        defs.families.insert(family, names);
     }
-    ctx.set_fonts(defs);
 }
 
 fn line_highlights(text: &str, rules: &[(String, [u8; 3], bool)]) -> Vec<(usize, usize, Color32)> {
@@ -4517,8 +4564,20 @@ fn ctrl_letter(key: egui::Key) -> Option<u8> {
 
 fn key_to_bytes(key: egui::Key, mods: egui::Modifiers, mode: TermMode) -> Option<Vec<u8>> {
     use egui::Key::*;
-    let ctrl = mods.ctrl || mods.command;
+    // On macOS the Command key belongs to the application (copy/paste/zoom),
+    // while Control is the terminal control modifier. Elsewhere they are the
+    // same key, so only `ctrl` produces control bytes.
+    let ctrl = mods.ctrl;
     let app_cursor = mode.contains(TermMode::APP_CURSOR);
+
+    #[cfg(target_os = "macos")]
+    if mods.command && !mods.ctrl {
+        match key {
+            ArrowLeft => return Some(vec![0x01]),
+            ArrowRight => return Some(vec![0x05]),
+            _ => {}
+        }
+    }
 
     if ctrl {
         if let Some(byte) = ctrl_letter(key) {
@@ -4598,11 +4657,98 @@ fn key_to_bytes(key: egui::Key, mods: egui::Modifiers, mode: TermMode) -> Option
         F24 => function_key(24, mods)?,
         Backslash if ctrl => vec![0x1c],
         CloseBracket if ctrl => vec![0x1d],
-        // Ctrl+^ / Ctrl+_ share physical keys with 6 / - on many layouts.
+        Slash if ctrl => vec![0x1f],
+        // Ctrl+^, Ctrl+@ and Ctrl+_ share physical keys with 6, 2 and - on
+        // many layouts.
         Num6 if ctrl => vec![0x1e],
+        Num2 if ctrl && mods.shift => vec![0x00],
         Minus if ctrl => vec![0x1f],
         _ => return None,
     })
+}
+
+/// macOS terminals treat Option as Meta: send ESC followed by the base key
+/// instead of the composed character produced by the layout (Option+U = "¨").
+fn meta_key_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
+    use egui::Key::*;
+    let base = match key {
+        A => 'a',
+        B => 'b',
+        C => 'c',
+        D => 'd',
+        E => 'e',
+        F => 'f',
+        G => 'g',
+        H => 'h',
+        I => 'i',
+        J => 'j',
+        K => 'k',
+        L => 'l',
+        M => 'm',
+        N => 'n',
+        O => 'o',
+        P => 'p',
+        Q => 'q',
+        R => 'r',
+        S => 's',
+        T => 't',
+        U => 'u',
+        V => 'v',
+        W => 'w',
+        X => 'x',
+        Y => 'y',
+        Z => 'z',
+        Num0 => '0',
+        Num1 => '1',
+        Num2 => '2',
+        Num3 => '3',
+        Num4 => '4',
+        Num5 => '5',
+        Num6 => '6',
+        Num7 => '7',
+        Num8 => '8',
+        Num9 => '9',
+        Space => ' ',
+        Minus => '-',
+        Equals => '=',
+        Slash => '/',
+        Backslash => '\\',
+        OpenBracket => '[',
+        CloseBracket => ']',
+        Semicolon => ';',
+        Quote => '\'',
+        Comma => ',',
+        Period => '.',
+        Backtick => '`',
+        _ => return None,
+    };
+    let base = if mods.shift {
+        base.to_ascii_uppercase()
+    } else {
+        base
+    };
+    Some(vec![0x1b, base as u8])
+}
+
+fn meta_shortcut_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
+    if !cfg!(target_os = "macos") || !mods.alt || mods.ctrl || mods.command {
+        return None;
+    }
+    meta_key_bytes(key, mods)
+}
+
+fn modifiers_after(
+    events: &[egui::Event],
+    index: usize,
+    fallback: egui::Modifiers,
+) -> egui::Modifiers {
+    events[index + 1..]
+        .iter()
+        .find_map(|event| match event {
+            egui::Event::Key { modifiers, .. } => Some(*modifiers),
+            _ => None,
+        })
+        .unwrap_or(fallback)
 }
 
 #[cfg(target_os = "linux")]
@@ -4764,28 +4910,27 @@ impl App {
         }
 
         if !self.close_input_blocked && !self.close_confirmation.active() {
-            if ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
-            }) {
+            let primary_shift = egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT);
+            if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::T)) {
                 self.new_local();
             }
-            if ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)
-            }) {
+            if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::P)) {
                 self.composer_open = !self.composer_open;
             }
-            if ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::W)
-            }) {
+            if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::B)) {
+                self.show_sidebar = !self.show_sidebar;
+                self.save_ui_settings();
+            }
+            if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::W)) {
                 self.request_close_tab(self.active);
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)) {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
                 self.show_settings = true;
             }
         }
         let mut zoom_changed = false;
         ctx.input(|i| {
-            if i.modifiers.ctrl || i.modifiers.command {
+            if i.modifiers.command {
                 if i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus) {
                     self.font_size = (self.font_size + 1.0).min(30.0);
                     zoom_changed = true;
@@ -4895,9 +5040,21 @@ impl App {
                         }
                     });
                     ui.menu_button("View", |ui| {
+                        if ui
+                            .checkbox(
+                                &mut self.show_sidebar,
+                                format!("Devices sidebar ({}+Shift+B)", primary_key_label()),
+                            )
+                            .changed()
+                        {
+                            self.save_ui_settings();
+                        }
                         ui.checkbox(&mut self.split, "Split (2 panes)");
                         ui.checkbox(&mut self.grid, "Grid (2x2)");
-                        ui.checkbox(&mut self.composer_open, "Command composer (Ctrl+Shift+P)");
+                        ui.checkbox(
+                            &mut self.composer_open,
+                            format!("Command composer ({}+Shift+P)", primary_key_label()),
+                        );
                         ui.checkbox(&mut self.show_scratch, "Scratchpad");
                         ui.checkbox(&mut self.highlight, "Keyword highlight");
                         if ui
@@ -5152,7 +5309,7 @@ impl App {
                     }
                     if ui
                         .button("+ Terminal")
-                        .on_hover_text("New local shell (Ctrl+Shift+T)")
+                        .on_hover_text(format!("New local shell ({}+Shift+T)", primary_key_label()))
                         .clicked()
                     {
                         self.new_local();
@@ -5237,7 +5394,10 @@ impl App {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
                             .selectable_label(self.composer_open, "Command")
-                            .on_hover_text("Show command composer (Ctrl+Shift+P)")
+                            .on_hover_text(format!(
+                                "Show command composer ({}+Shift+P)",
+                                primary_key_label()
+                            ))
                             .clicked()
                         {
                             self.composer_open = !self.composer_open;
@@ -5345,14 +5505,18 @@ impl App {
                 });
         }
 
-        // Left: devices.
+        // Left: devices. Collapse it from the header, the View menu,
+        // Ctrl+Shift+B, or by dragging the resize handle past its minimum width.
+        let sidebar_was_visible = self.show_sidebar;
+        let mut sidebar_open = self.show_sidebar;
+        let mut hide_sidebar = false;
         egui::Panel::left("sidebar")
             .resizable(true)
             .default_size(244.0)
             .min_size(190.0)
             .max_size(360.0)
             .frame(panel_frame())
-            .show(ui, |ui| {
+            .show_collapsible(ui, &mut sidebar_open, |ui| {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("DEVICES").small().color(muted()));
@@ -5370,6 +5534,16 @@ impl App {
                             .clicked()
                         {
                             self.folder_editor = Some(FolderEditorState::new(None));
+                        }
+                        if ui
+                            .small_button("«")
+                            .on_hover_text(format!(
+                                "Hide sidebar ({}+Shift+B)",
+                                primary_key_label()
+                            ))
+                            .clicked()
+                        {
+                            hide_sidebar = true;
                         }
                     });
                 });
@@ -5479,6 +5653,13 @@ impl App {
                     }
                 }
             });
+        if hide_sidebar {
+            sidebar_open = false;
+        }
+        self.show_sidebar = sidebar_open;
+        if sidebar_was_visible != self.show_sidebar {
+            self.save_ui_settings();
+        }
 
         // Right: scratchpad (temporary notes for copy/paste).
         if self.show_scratch {
@@ -6372,6 +6553,7 @@ impl App {
                         ("Ctrl + -", "Zoom out"),
                         ("Ctrl + 0", "Reset zoom"),
                         ("Ctrl + ,", "Open settings"),
+                        ("Ctrl + Shift + B", "Show/hide the devices sidebar"),
                         ("Ctrl + C", "Copy selection (or ETX if none)"),
                         ("Ctrl + A", "Select all"),
                         ("Ctrl + V", "Paste"),
@@ -6387,10 +6569,32 @@ impl App {
                         ("Enter (COMMAND)", "Send to session"),
                         ("Shift+Enter", "New line in COMMAND"),
                     ] {
+                        let mac = cfg!(target_os = "macos");
+                        let key = if mac {
+                            k.replace("Ctrl", "Cmd")
+                        } else {
+                            k.to_string()
+                        };
+                        let description = if mac && k == "Ctrl + C" {
+                            "Copy selection"
+                        } else {
+                            v
+                        };
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(k).monospace().color(text_c()));
-                            ui.label(egui::RichText::new(v).color(muted()));
+                            ui.label(egui::RichText::new(key).monospace().color(text_c()));
+                            ui.label(egui::RichText::new(description).color(muted()));
                         });
+                    }
+                    if cfg!(target_os = "macos") {
+                        for (k, v) in [
+                            ("Ctrl + C", "Interrupt (ETX)"),
+                            ("Option + key", "Meta (ESC prefix)"),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(k).monospace().color(text_c()));
+                                ui.label(egui::RichText::new(v).color(muted()));
+                            });
+                        }
                     }
                 });
             if !open {
@@ -6988,6 +7192,24 @@ mod tests {
     }
 
     #[test]
+    fn custom_fonts_keep_default_glyph_fallbacks() {
+        let mut defs = egui::FontDefinitions::empty();
+        defs.families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("ot-sans".to_owned());
+        append_default_fonts(&mut defs);
+
+        let proportional = &defs.families[&egui::FontFamily::Proportional];
+        assert_eq!(proportional.first().map(String::as_str), Some("ot-sans"));
+        assert!(proportional.iter().any(|name| name == "emoji-icon-font"));
+        assert!(defs.font_data.contains_key("emoji-icon-font"));
+
+        let monospace = &defs.families[&egui::FontFamily::Monospace];
+        assert!(monospace.iter().any(|name| name == "Hack"));
+    }
+
+    #[test]
     fn backup_export_validates_the_password_before_writing() {
         let mut app = test_app();
         app.export_include_secrets = false;
@@ -7378,6 +7600,81 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nano_control_keys_and_quick_ctrl_v_reach_the_terminal() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        app.fonts_ready = true;
+        let ctx = egui::Context::default();
+        let input = |events, modifiers| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 500.0))),
+            events,
+            modifiers,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input(vec![], egui::Modifiers::NONE), |ui| app.show(ui));
+        let pos = Pos2::new(450.0, 250.0);
+        for pressed in [true, false] {
+            let _ = ctx.run_ui(
+                input(
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    egui::Modifiers::NONE,
+                ),
+                |ui| app.show(ui),
+            );
+        }
+        let _ = ctx.run_ui(
+            input(
+                vec![egui::Event::Key {
+                    key: egui::Key::O,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
+                egui::Modifiers::CTRL,
+            ),
+            |ui| app.show(ui),
+        );
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            &[0x0f],
+            "nano write-out (Ctrl+O) must reach the terminal"
+        );
+        writes.lock().unwrap().clear();
+        let _ = ctx.run_ui(
+            input(
+                vec![
+                    egui::Event::Paste("clipboard text".into()),
+                    egui::Event::Key {
+                        key: egui::Key::V,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            ),
+            |ui| app.show(ui),
+        );
+        assert_eq!(
+            &*writes.lock().unwrap(),
+            &[0x16],
+            "Ctrl+V must page down in nano instead of pasting"
+        );
+    }
+
     #[test]
     fn tab_and_arrows_stay_with_the_focused_terminal() {
         let mut app = test_app();
@@ -7726,6 +8023,17 @@ mod tests {
         assert_eq!(value["terminal_appearance"]["palette"], "original");
         assert_eq!(value["terminal_appearance"]["font"], "system");
         assert_eq!(value["terminal_appearance"]["brightness"], 100.0);
+        assert_eq!(value["sidebar_visible"], true);
+    }
+
+    #[test]
+    fn hidden_sidebar_survives_settings_save_and_reload() {
+        let mut app = test_app();
+        app.show_sidebar = false;
+        app.save_ui_settings();
+        app.show_sidebar = true;
+        app.load_ui_settings();
+        assert!(!app.show_sidebar);
     }
 
     #[test]
@@ -8671,6 +8979,96 @@ mod tests {
         assert_eq!(
             key_to_bytes(egui::Key::Delete, egui::Modifiers::SHIFT, mode),
             Some(b"\x1b[3;2~".to_vec())
+        );
+    }
+
+    #[test]
+    fn editor_control_keys_send_their_expected_bytes() {
+        let mode = TermMode::default();
+        for (key, byte) in [
+            (egui::Key::O, 0x0f),
+            (egui::Key::W, 0x17),
+            (egui::Key::K, 0x0b),
+            (egui::Key::U, 0x15),
+            (egui::Key::G, 0x07),
+            (egui::Key::Slash, 0x1f),
+        ] {
+            assert_eq!(
+                key_to_bytes(key, egui::Modifiers::CTRL, mode),
+                Some(vec![byte]),
+                "{key:?}"
+            );
+        }
+        assert_eq!(
+            key_to_bytes(
+                egui::Key::Num2,
+                egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT),
+                mode
+            ),
+            Some(vec![0x00])
+        );
+    }
+
+    #[test]
+    fn macos_command_key_does_not_send_control_codes() {
+        let mode = TermMode::default();
+        assert_eq!(
+            key_to_bytes(egui::Key::O, egui::Modifiers::COMMAND, mode),
+            None
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::C, egui::Modifiers::COMMAND, mode),
+            None
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::O, egui::Modifiers::CTRL, mode),
+            Some(vec![0x0f])
+        );
+    }
+
+    #[test]
+    fn option_key_sends_an_escape_prefix() {
+        assert_eq!(
+            meta_key_bytes(egui::Key::U, egui::Modifiers::ALT),
+            Some(vec![0x1b, b'u'])
+        );
+        assert_eq!(
+            meta_key_bytes(
+                egui::Key::U,
+                egui::Modifiers::ALT.plus(egui::Modifiers::SHIFT)
+            ),
+            Some(vec![0x1b, b'U'])
+        );
+        assert_eq!(
+            meta_key_bytes(egui::Key::ArrowUp, egui::Modifiers::ALT),
+            None
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_command_editing_shortcuts_map_to_readline() {
+        let mode = TermMode::default();
+        assert_eq!(
+            key_to_bytes(egui::Key::ArrowLeft, egui::Modifiers::COMMAND, mode),
+            Some(vec![0x01])
+        );
+        assert_eq!(
+            key_to_bytes(egui::Key::ArrowRight, egui::Modifiers::COMMAND, mode),
+            Some(vec![0x05])
+        );
+        let (session, _) = test_session(std::io::empty());
+        assert_eq!(
+            session.key_bytes(egui::Key::Backspace, egui::Modifiers::COMMAND),
+            Some(vec![0x15])
+        );
+        assert_eq!(
+            meta_shortcut_bytes(egui::Key::U, egui::Modifiers::ALT),
+            Some(vec![0x1b, b'u'])
+        );
+        assert_eq!(
+            meta_shortcut_bytes(egui::Key::U, egui::Modifiers::NONE),
+            None
         );
     }
 

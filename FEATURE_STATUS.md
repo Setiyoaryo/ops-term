@@ -1,5 +1,7 @@
 # Feature Status
 
+3 November 2026 — v0.1.14: sidebar devices bisa disembunyikan/di-collapse dan statusnya diingat; fallback font egui dipulihkan; shortcut editor seperti nano (Ctrl+O/W/K/U/G, Ctrl+/) dan Ctrl+V cepat sampai ke terminal; dukungan macOS menambahkan Cmd untuk shortcut aplikasi, Option sebagai Meta, serta Cmd+C/X/V/A dan Cmd+Backspace/Left/Right. 166 test egui lulus. [Catatan rilis](docs/releases/v0.1.14.md).
+
 1 November 2026 — v0.1.12: export backup terenkripsi berisi devices, folder, command, workspace, runbook, settings dan kredensial opsional; payload memakai Argon2id + AES-256-GCM, file `0600`, dan path pribadi dibersihkan dari dokumentasi. [Test backup](core/src/backup.rs).
 
 29 Oktober 2026 — v0.1.11: updater menyimpan lokasi executable saat startup, mengenali pembaruan terverifikasi yang sudah terpasang sebagai perlu restart, serta menolak perubahan target yang tidak dikenal dan installer bersamaan. [Bukti pengujian](docs/updater-replaced-executable-2026-10-29.md).
