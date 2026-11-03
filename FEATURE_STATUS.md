@@ -1,5 +1,7 @@
 # Feature Status
 
+3 November 2026 — v0.1.17: kontrol pemulihan sidebar dibuat minimalis tanpa tombol besar; jendela Runbooks menampilkan target/status, menjelaskan kegagalan, dan menyediakan Stop; Run menjalankan script pada sesi aktif. 170 test egui lulus. [Catatan rilis](docs/releases/v0.1.17.md).
+
 3 November 2026 — v0.1.16: sidebar yang disembunyikan menampilkan rail dengan tombol pemulihan; header sidebar, menu bar, tab bar dan status bar dibuat responsif agar tombol tidak bertumpuk pada jendela sempit. 167 test egui lulus, termasuk render 360 px. [Catatan rilis](docs/releases/v0.1.16.md).
 
 3 November 2026 — v0.1.15: sidebar devices bisa disembunyikan/di-collapse dan statusnya diingat; fallback font egui dipulihkan; shortcut editor seperti nano (Ctrl+O/W/K/U/G, Ctrl+/) dan Ctrl+V cepat sampai ke terminal; dukungan macOS menambahkan Cmd untuk shortcut aplikasi, Option sebagai Meta, serta Cmd+C/X/V/A dan Cmd+Backspace/Left/Right. 166 test egui lulus. [Catatan rilis](docs/releases/v0.1.15.md).

@@ -1052,6 +1052,7 @@ struct App {
     rb_id: Option<String>,
     rb_name: String,
     rb_script: String,
+    rb_msg: String,
     show_subnet: bool,
     sub_ip: String,
     sub_prefix: u32,
@@ -1224,6 +1225,7 @@ impl App {
             rb_id: None,
             rb_name: String::new(),
             rb_script: String::new(),
+            rb_msg: String::new(),
             show_subnet: false,
             sub_ip: "192.168.1.10".into(),
             sub_prefix: 24,
@@ -4032,10 +4034,39 @@ impl App {
         }
     }
 
-    fn start_runner(&mut self, script: &str) {
-        if let Some(target) = self.sessions.get(self.active).map(|s| s.id) {
-            self.start_runner_for(target, script);
-        }
+    /// Start an expect script on the active session and return a message that
+    /// can be shown in the Runbooks window.
+    fn run_script_on_active(&mut self, script: &str) -> String {
+        self.flash.clear();
+        let Some((target, title)) = self
+            .sessions
+            .get(self.active)
+            .map(|session| (session.id, session.title.clone()))
+        else {
+            self.flash = "No active session — open a terminal first.".into();
+            return self.flash.clone();
+        };
+        self.start_runner_for(target, script);
+        let message = if self.flash.is_empty() {
+            if self.runners.iter().any(|runner| runner.target == target) {
+                format!("Running on {title}…")
+            } else {
+                "The script is empty or could not be started.".into()
+            }
+        } else {
+            self.flash.clone()
+        };
+        self.flash = message.clone();
+        message
+    }
+
+    fn stop_runner(&mut self) -> bool {
+        let Some(target) = self.sessions.get(self.active).map(|session| session.id) else {
+            return false;
+        };
+        let before = self.runners.len();
+        self.runners.retain(|runner| runner.target != target);
+        before != self.runners.len()
     }
 
     fn cancel_startup_pager(&mut self, target: u64) {
@@ -5701,22 +5732,44 @@ impl App {
         if !sidebar_rendered && !self.show_sidebar {
             egui::Panel::left("sidebar_rail")
                 .exact_size(30.0)
-                .frame(panel_frame())
+                .frame(
+                    egui::Frame::NONE
+                        .fill(panel())
+                        .stroke(Stroke::new(1.0, border())),
+                )
                 .show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(4.0);
-                        if ui
-                            .small_button("»")
-                            .on_hover_text(format!(
-                                "Show devices sidebar ({}+Shift+B)",
-                                primary_key_label()
-                            ))
-                            .clicked()
-                        {
-                            self.show_sidebar = true;
-                            self.save_ui_settings();
-                        }
-                    });
+                    ui.add_space(6.0);
+                    let (rect, response) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), 26.0),
+                        egui::Sense::click(),
+                    );
+                    let button = rect.shrink2(Vec2::new(4.0, 2.0));
+                    if response.hovered() {
+                        ui.painter()
+                            .rect_filled(button, 5.0, Color32::from_rgb(0x20, 0x26, 0x2D));
+                    }
+                    ui.painter().text(
+                        button.center(),
+                        Align2::CENTER_CENTER,
+                        "»",
+                        FontId::proportional(15.0),
+                        if response.hovered() {
+                            text_c()
+                        } else {
+                            muted()
+                        },
+                    );
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(format!(
+                            "Show devices sidebar ({}+Shift+B)",
+                            primary_key_label()
+                        ))
+                        .clicked()
+                    {
+                        self.show_sidebar = true;
+                        self.save_ui_settings();
+                    }
                 });
         }
 
@@ -6354,12 +6407,39 @@ impl App {
             let mut load: Option<Runbook> = None;
             let mut delete: Option<String> = None;
             let mut run = false;
+            let mut stop = false;
             let mut save = false;
+            let active = self
+                .sessions
+                .get(self.active)
+                .map(|session| (session.title.clone(), session.id));
+            let running = active
+                .as_ref()
+                .map(|(_, id)| self.runners.iter().any(|runner| runner.target == *id))
+                .unwrap_or(false);
             egui::Window::new("Runbooks")
                 .open(&mut open)
                 .resizable(true)
-                .default_width(600.0)
+                .default_width(560.0)
                 .show(&ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if let Some((title, _)) = &active {
+                            ui.label(
+                                egui::RichText::new(format!("Target: {title}"))
+                                    .small()
+                                    .color(muted()),
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new("No active session — open a terminal first")
+                                    .small()
+                                    .color(Color32::from_rgb(0xE5, 0x70, 0x70)),
+                            );
+                        }
+                        if running {
+                            ui.label(egui::RichText::new("● script running").small().color(ok()));
+                        }
+                    });
                     ui.label(
                         egui::RichText::new(
                             "Scripts: send / sendline / waitfor <regex> [ms] / sleep",
@@ -6367,6 +6447,7 @@ impl App {
                         .small()
                         .color(muted()),
                     );
+                    ui.add_space(2.0);
                     egui::ScrollArea::vertical()
                         .max_height(120.0)
                         .show(ui, |ui| {
@@ -6384,6 +6465,7 @@ impl App {
                                 );
                             }
                         });
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label("Name");
                         ui.add(egui::TextEdit::singleline(&mut self.rb_name).desired_width(240.0));
@@ -6394,12 +6476,22 @@ impl App {
                             .desired_width(f32::INFINITY)
                             .font(FontId::monospace(12.0)),
                     );
+                    ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         if ui.button("Save").clicked() {
                             save = true;
                         }
-                        if ui.button("Run ▶").clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("Run").strong().color(bg()))
+                                    .fill(accent()),
+                            )
+                            .clicked()
+                        {
                             run = true;
+                        }
+                        if ui.add_enabled(running, egui::Button::new("Stop")).clicked() {
+                            stop = true;
                         }
                         if ui.button("Delete").clicked() {
                             if let Some(id) = &self.rb_id {
@@ -6407,27 +6499,47 @@ impl App {
                             }
                         }
                     });
+                    if !self.rb_msg.is_empty() {
+                        ui.add_space(2.0);
+                        ui.label(egui::RichText::new(&self.rb_msg).small().color(muted()));
+                    }
                 });
             if let Some(rb) = load {
                 self.rb_id = Some(rb.id.clone());
                 self.rb_name = rb.name.clone();
                 self.rb_script = rb.script.clone();
+                self.rb_msg.clear();
             }
             if save {
-                let input = RunbookInput {
-                    id: self.rb_id.clone(),
-                    name: self.rb_name.clone(),
-                    description: None,
-                    script: self.rb_script.clone(),
-                };
-                if let Ok(rb) = self.db.upsert_runbook(&input) {
-                    self.rb_id = Some(rb.id);
-                    self.runbooks = self.db.list_runbooks().unwrap_or_default();
+                if self.rb_name.trim().is_empty() {
+                    self.rb_msg = "Name is required.".into();
+                } else {
+                    let input = RunbookInput {
+                        id: self.rb_id.clone(),
+                        name: self.rb_name.clone(),
+                        description: None,
+                        script: self.rb_script.clone(),
+                    };
+                    match self.db.upsert_runbook(&input) {
+                        Ok(rb) => {
+                            self.rb_id = Some(rb.id);
+                            self.rb_msg = format!("Saved {}.", rb.name);
+                            self.runbooks = self.db.list_runbooks().unwrap_or_default();
+                        }
+                        Err(error) => self.rb_msg = format!("Could not save: {error}"),
+                    }
                 }
             }
             if run {
                 let script = self.rb_script.clone();
-                self.start_runner(&script);
+                self.rb_msg = self.run_script_on_active(&script);
+            }
+            if stop {
+                self.rb_msg = if self.stop_runner() {
+                    "Stopped the running script.".into()
+                } else {
+                    "No script is running on this session.".into()
+                };
             }
             if let Some(id) = delete {
                 let _ = self.db.delete_runbook(&id);
@@ -6435,6 +6547,7 @@ impl App {
                 self.rb_id = None;
                 self.rb_name.clear();
                 self.rb_script.clear();
+                self.rb_msg = "Deleted.".into();
             }
             if !open {
                 self.show_runbooks = false;
@@ -8735,7 +8848,7 @@ mod tests {
         let (a, wa) = test_session(std::io::empty());
         let (b, wb) = test_session(std::io::empty());
         app.sessions.extend([a, b]);
-        app.start_runner("sleep 0\nsendline show version");
+        let _ = app.run_script_on_active("sleep 0\nsendline show version");
         app.active = 1;
         app.tick_runner();
         assert_eq!(&*wa.lock().unwrap(), b"show version\r");
@@ -8743,11 +8856,50 @@ mod tests {
     }
 
     #[test]
+    fn runbook_run_uses_active_session_and_reports_status() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        let message = app.run_script_on_active("sendline show version");
+        assert!(message.starts_with("Running on"), "{message}");
+        app.tick_runner();
+        assert_eq!(&*writes.lock().unwrap(), b"show version\r");
+        assert!(!app.stop_runner(), "runner should already be finished");
+    }
+
+    #[test]
+    fn runbook_run_explains_missing_session_and_empty_script() {
+        let mut app = test_app();
+        assert!(app
+            .run_script_on_active("sendline show version")
+            .contains("No active session"));
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        let message = app.run_script_on_active("  # nothing to do\n");
+        assert!(message.contains("empty"), "{message}");
+        assert!(writes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn runbook_stop_cancels_the_active_script() {
+        let mut app = test_app();
+        let (session, writes) = test_session(std::io::empty());
+        app.sessions.push(session);
+        assert!(app
+            .run_script_on_active("waitfor NEVER 10000\nsendline show version")
+            .starts_with("Running on"));
+        assert!(app.stop_runner());
+        app.tick_runner();
+        assert!(writes.lock().unwrap().is_empty());
+        assert!(app.runners.is_empty());
+    }
+
+    #[test]
     fn runner_timeout_does_not_send_next_command() {
         let mut app = test_app();
         let (s, writes) = test_session(std::io::empty());
         app.sessions.push(s);
-        app.start_runner("waitfor NEVER 0\nsendline configure terminal");
+        let _ = app.run_script_on_active("waitfor NEVER 0\nsendline configure terminal");
         app.tick_runner();
         assert!(writes.lock().unwrap().is_empty());
         assert!(app.runners.is_empty());
@@ -8759,7 +8911,7 @@ mod tests {
         let mut app = test_app();
         let (s, writes) = test_session(std::io::empty());
         app.sessions.push(s);
-        app.start_runner("sendline dangerous\nwaitfor [ 0");
+        let _ = app.run_script_on_active("sendline dangerous\nwaitfor [ 0");
         app.tick_runner();
         assert!(writes.lock().unwrap().is_empty());
         assert!(app.runners.is_empty());
@@ -8772,7 +8924,7 @@ mod tests {
         let (a, wa) = test_session(std::io::empty());
         let (b, wb) = test_session(std::io::empty());
         app.sessions.extend([a, b]);
-        app.start_runner("sendline show version");
+        let _ = app.run_script_on_active("sendline show version");
         app.move_tab(0, 1);
         app.active = 0;
         app.tick_runner();
@@ -8786,7 +8938,7 @@ mod tests {
         let (a, _) = test_session(std::io::empty());
         let (b, wb) = test_session(std::io::empty());
         app.sessions.extend([a, b]);
-        app.start_runner("sendline configure terminal");
+        let _ = app.run_script_on_active("sendline configure terminal");
         app.sessions.remove(0);
         app.tick_runner();
         assert!(wb.lock().unwrap().is_empty());
