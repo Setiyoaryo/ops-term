@@ -5000,13 +5000,16 @@ impl App {
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("OpsTerm")
-                            .size(17.0)
-                            .strong()
-                            .color(text_c()),
-                    );
-                    ui.add_space(10.0);
+                    let bar_width = ui.available_width();
+                    if bar_width >= 520.0 {
+                        ui.label(
+                            egui::RichText::new("OpsTerm")
+                                .size(17.0)
+                                .strong()
+                                .color(text_c()),
+                        );
+                        ui.add_space(10.0);
+                    }
                     ui.separator();
                     ui.menu_button("File", |ui| {
                         if ui.button("Refresh devices").clicked() {
@@ -5180,29 +5183,31 @@ impl App {
                             ui.close();
                         }
                     });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let connect = ui
-                            .add_enabled(
-                                !self.quick.trim().is_empty(),
-                                egui::Button::new(
-                                    egui::RichText::new("Connect").strong().color(bg()),
+                    if bar_width >= 680.0 {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let connect = ui
+                                .add_enabled(
+                                    !self.quick.trim().is_empty(),
+                                    egui::Button::new(
+                                        egui::RichText::new("Connect").strong().color(bg()),
+                                    )
+                                    .fill(accent()),
                                 )
-                                .fill(accent()),
-                            )
-                            .clicked();
-                        let width = ui.available_width().clamp(100.0, 340.0);
-                        let q = ui.add_sized(
-                            [width, 30.0],
-                            egui::TextEdit::singleline(&mut self.quick)
-                                .id(egui::Id::new("quick-connect"))
-                                .hint_text("user@host  ·  Quick connect"),
-                        );
-                        if connect
-                            || (q.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                        {
-                            self.connect_quick();
-                        }
-                    });
+                                .clicked();
+                            let width = ui.available_width().clamp(100.0, 340.0);
+                            let q = ui.add_sized(
+                                [width, 30.0],
+                                egui::TextEdit::singleline(&mut self.quick)
+                                    .id(egui::Id::new("quick-connect"))
+                                    .hint_text("user@host  ·  Quick connect"),
+                            );
+                            if connect
+                                || (q.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            {
+                                self.connect_quick();
+                            }
+                        });
+                    }
                 });
             });
 
@@ -5213,9 +5218,13 @@ impl App {
                 ui.horizontal_centered(|ui| {
                     let mut remove = None;
                     let mut reorder = None;
+                    let bar_width = ui.available_width();
+                    let compact = bar_width < 560.0;
+                    let reserve = if compact { 46.0 } else { 116.0 };
+                    let tab_min = if compact { 88.0 } else { 112.0 };
                     egui::ScrollArea::horizontal()
                         .id_salt("session-tabs")
-                        .max_width((ui.available_width() - 112.0).max(80.0))
+                        .max_width((bar_width - reserve).max(60.0))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -5242,7 +5251,7 @@ impl App {
                                                 )
                                                 .sense(egui::Sense::click_and_drag())
                                                 .corner_radius(3)
-                                                .min_size(Vec2::new(112.0, 28.0)),
+                                                .min_size(Vec2::new(tab_min, 28.0)),
                                             )
                                         })
                                         .inner;
@@ -5308,8 +5317,9 @@ impl App {
                             self.request_close_tab(i);
                         }
                     }
+                    let new_tab = if compact { "+" } else { "+ Terminal" };
                     if ui
-                        .button("+ Terminal")
+                        .add(egui::Button::new(new_tab).min_size(Vec2::new(0.0, 28.0)))
                         .on_hover_text(format!("New local shell ({}+Shift+T)", primary_key_label()))
                         .clicked()
                     {
@@ -5354,6 +5364,12 @@ impl App {
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
+                    let bar_width = ui.available_width();
+                    let compact = bar_width < 620.0;
+                    let tiny = bar_width < 480.0;
+                    if compact {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                    }
                     if let Some(session) = self.sessions.get(self.active) {
                         let state = if session.opening {
                             "Connecting"
@@ -5373,8 +5389,15 @@ impl App {
                             ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
                         ui.painter().circle_filled(dot.center(), 3.0, state_color);
                         ui.label(egui::RichText::new(state).size(13.0).color(muted()));
+                        let title_width = if tiny {
+                            64.0
+                        } else if compact {
+                            96.0
+                        } else {
+                            130.0
+                        };
                         ui.add_sized(
-                            [130.0, 20.0],
+                            [title_width, 20.0],
                             egui::Label::new(egui::RichText::new(&session.title).size(13.0))
                                 .truncate(),
                         );
@@ -5383,12 +5406,14 @@ impl App {
                                 .size(13.0)
                                 .color(muted()),
                         );
-                        let secs = session.connected_at.elapsed().as_secs();
-                        ui.label(
-                            egui::RichText::new(format!("{:02}:{:02}", secs / 60, secs % 60))
-                                .size(13.0)
-                                .color(muted()),
-                        );
+                        if !compact {
+                            let secs = session.connected_at.elapsed().as_secs();
+                            ui.label(
+                                egui::RichText::new(format!("{:02}:{:02}", secs / 60, secs % 60))
+                                    .size(13.0)
+                                    .color(muted()),
+                            );
+                        }
                     } else {
                         ui.label(egui::RichText::new("Ready").size(13.0).color(muted()));
                     }
@@ -5403,26 +5428,30 @@ impl App {
                         {
                             self.composer_open = !self.composer_open;
                         }
-                        if ui.button("Reconnect").clicked() {
+                        if !tiny && ui.button("Reconnect").clicked() {
                             self.reconnect_active();
                         }
-                        ui.label(
-                            egui::RichText::new(format!("{} MiB", self.runtime_rss_mib))
-                                .size(13.0)
-                                .color(muted()),
-                        )
-                        .on_hover_text("Process resident memory (RSS)");
+                        if !compact {
+                            ui.label(
+                                egui::RichText::new(format!("{} MiB", self.runtime_rss_mib))
+                                    .size(13.0)
+                                    .color(muted()),
+                            )
+                            .on_hover_text("Process resident memory (RSS)");
+                        }
                         if self
                             .last_bell
                             .is_some_and(|t| t.elapsed() < Duration::from_secs(3))
                         {
                             ui.colored_label(accent(), "Bell");
                         }
-                        ui.label(
-                            egui::RichText::new(format!("{} tabs", self.sessions.len()))
-                                .size(13.0)
-                                .color(muted()),
-                        );
+                        if !compact {
+                            ui.label(
+                                egui::RichText::new(format!("{} tabs", self.sessions.len()))
+                                    .size(13.0)
+                                    .color(muted()),
+                            );
+                        }
                     });
                 });
             });
@@ -5511,26 +5540,31 @@ impl App {
         let sidebar_was_visible = self.show_sidebar;
         let mut sidebar_open = self.show_sidebar;
         let mut hide_sidebar = false;
-        egui::Panel::left("sidebar")
+        let sidebar_min = (ui.available_width() * 0.35).clamp(140.0, 190.0);
+        let sidebar_max = (ui.available_width() * 0.60).clamp(190.0, 360.0);
+        let sidebar_rendered = egui::Panel::left("sidebar")
             .resizable(true)
             .default_size(244.0)
-            .min_size(190.0)
-            .max_size(360.0)
+            .min_size(sidebar_min)
+            .max_size(sidebar_max)
             .frame(panel_frame())
             .show_collapsible(ui, &mut sidebar_open, |ui| {
                 ui.add_space(2.0);
+                let narrow = ui.available_width() < 240.0;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("DEVICES").small().color(muted()));
+                    if !narrow {
+                        ui.label(egui::RichText::new("DEVICES").small().color(muted()));
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
-                            .small_button("+ New")
+                            .small_button(if narrow { "+" } else { "+ New" })
                             .on_hover_text("Add a saved device")
                             .clicked()
                         {
                             self.editor = Some(EditorState::new());
                         }
                         if ui
-                            .small_button("+ Folder")
+                            .small_button(if narrow { "⊞" } else { "+ Folder" })
                             .on_hover_text("Create a folder")
                             .clicked()
                         {
@@ -5555,11 +5589,13 @@ impl App {
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{} devices", self.devices.len()))
-                            .small()
-                            .color(muted()),
-                    );
+                    if ui.available_width() >= 190.0 {
+                        ui.label(
+                            egui::RichText::new(format!("{} devices", self.devices.len()))
+                                .small()
+                                .color(muted()),
+                        );
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("Refresh").clicked() {
                             self.refresh_folders();
@@ -5653,13 +5689,35 @@ impl App {
                         }
                     }
                 }
-            });
+            })
+            .is_some();
         if hide_sidebar {
             sidebar_open = false;
         }
         self.show_sidebar = sidebar_open;
         if sidebar_was_visible != self.show_sidebar {
             self.save_ui_settings();
+        }
+        if !sidebar_rendered && !self.show_sidebar {
+            egui::Panel::left("sidebar_rail")
+                .exact_size(30.0)
+                .frame(panel_frame())
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(4.0);
+                        if ui
+                            .small_button("»")
+                            .on_hover_text(format!(
+                                "Show devices sidebar ({}+Shift+B)",
+                                primary_key_label()
+                            ))
+                            .clicked()
+                        {
+                            self.show_sidebar = true;
+                            self.save_ui_settings();
+                        }
+                    });
+                });
         }
 
         // Right: scratchpad (temporary notes for copy/paste).
@@ -8572,6 +8630,33 @@ mod tests {
                     );
                 },
             );
+        }
+    }
+
+    #[test]
+    fn workspace_renders_at_narrow_widths() {
+        for show_sidebar in [true, false] {
+            let mut app = test_app();
+            app.sessions.push(test_session(std::io::empty()).0);
+            app.show_sidebar = show_sidebar;
+            app.fonts_ready = true;
+            let ctx = egui::Context::default();
+            for _ in 0..2 {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(360.0, 500.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.show(ui);
+                        assert!(
+                            ui.min_rect().right() <= 361.0,
+                            "narrow workspace overflow with sidebar={show_sidebar}: {:?}",
+                            ui.min_rect()
+                        );
+                    },
+                );
+            }
         }
     }
 
