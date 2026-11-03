@@ -2948,10 +2948,11 @@ impl App {
                                 // On macOS the composed text may be a special
                                 // character, so Meta is handled from the key
                                 // event below instead.
-                                if i.modifiers.alt && !i.modifiers.ctrl {
-                                    if !cfg!(target_os = "macos") {
-                                        out.push(0x1b);
-                                    }
+                                if i.modifiers.alt
+                                    && !i.modifiers.ctrl
+                                    && !cfg!(target_os = "macos")
+                                {
+                                    out.push(0x1b);
                                 }
                                 if !(cfg!(target_os = "macos") && i.modifiers.alt) {
                                     out.extend_from_slice(t.as_bytes());
