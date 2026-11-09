@@ -7288,13 +7288,7 @@ fn main() -> eframe::Result<()> {
         startup::Launch::Telnet { spec, title } => app.open_telnet_console(spec, title),
         _ => app.new_local(),
     }
-    let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 760.0])
-            .with_min_inner_size([760.0, 500.0])
-            .with_title(window_title),
-        ..Default::default()
-    };
+    let mut options = native_options(window_title);
     match backend {
         display_backend::Backend::Auto => {}
         display_backend::Backend::X11 => {
@@ -7321,9 +7315,35 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+/// Window/renderer options.
+///
+/// vsync is disabled on purpose: with swap interval 1, Mesa's Wayland EGL
+/// `eglSwapBuffers` blocks the main thread in `poll()` until the compositor
+/// delivers a frame callback. GNOME withholds frame callbacks for hidden or
+/// occluded windows, so the UI thread could not answer the compositor ping and
+/// GNOME showed "OpsTerm is not responding". Repaints are already demand-driven
+/// and capped by `request_repaint_after`, so vsync buys nothing here.
+fn native_options(window_title: String) -> eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1180.0, 760.0])
+            .with_min_inner_size([760.0, 500.0])
+            .with_title(window_title),
+        ..Default::default()
+    };
+    options.glow_options.vsync = false;
+    options
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swap_never_blocks_on_compositor_frame_callbacks() {
+        let options = native_options("OpsTerm".into());
+        assert!(!options.glow_options.vsync);
+    }
     use std::sync::atomic::AtomicUsize;
 
     struct TestProvider {

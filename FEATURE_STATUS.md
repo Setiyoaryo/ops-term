@@ -1,5 +1,7 @@
 # Feature Status
 
+9 November 2026 — v0.1.18: memperbaiki dialog GNOME “OpsTerm is not responding” di Wayland; vsync dimatikan agar eglSwapBuffers tidak memblokir thread UI saat jendela tersembunyi/tertutup. 171 test egui lulus. [Catatan rilis](docs/releases/v0.1.18.md).
+
 3 November 2026 — v0.1.17: kontrol pemulihan sidebar dibuat minimalis tanpa tombol besar; jendela Runbooks menampilkan target/status, menjelaskan kegagalan, dan menyediakan Stop; Run menjalankan script pada sesi aktif. 170 test egui lulus. [Catatan rilis](docs/releases/v0.1.17.md).
 
 3 November 2026 — v0.1.16: sidebar yang disembunyikan menampilkan rail dengan tombol pemulihan; header sidebar, menu bar, tab bar dan status bar dibuat responsif agar tombol tidak bertumpuk pada jendela sempit. 167 test egui lulus, termasuk render 360 px. [Catatan rilis](docs/releases/v0.1.16.md).
