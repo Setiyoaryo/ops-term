@@ -14,7 +14,8 @@ pub fn spawn_local_shell(dims: TerminalDimensions) -> AppResult<Box<dyn Connecti
     let shell = resolve_local_shell()?;
     let mut cmd = CommandBuilder::new(&shell);
     // Login shell so the user's profile/rc files apply, matching a normal
-    // terminal emulator.
+    // terminal emulator. Windows shells have no `-l` equivalent here.
+    #[cfg(unix)]
     cmd.arg("-l");
     cmd.env("TERM", "xterm-256color");
     // Advertise the colour capability and terminal identity. Without
@@ -30,7 +31,7 @@ pub fn spawn_local_shell(dims: TerminalDimensions) -> AppResult<Box<dyn Connecti
         "LANG",
         std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into()),
     );
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::platform::home_dir() {
         cmd.cwd(home);
     }
 

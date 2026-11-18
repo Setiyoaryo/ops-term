@@ -1,3 +1,5 @@
+18 November 2026 — v0.1.19: build portabel macOS (aarch64/x86_64) dan Windows (x86_64) ditambahkan; Keychain/Credential Manager, updater Windows dengan rename-lalu-restart, dan manifest pembaruan tunggal. Build belum di-notarize/di-code-sign. [Catatan rilis](docs/releases/v0.1.19.md).
+
 # Feature Status
 
 9 November 2026 — v0.1.18: memperbaiki dialog GNOME “OpsTerm is not responding” di Wayland; vsync dimatikan agar eglSwapBuffers tidak memblokir thread UI saat jendela tersembunyi/tertutup. 171 test egui lulus. [Catatan rilis](docs/releases/v0.1.18.md).

@@ -4,6 +4,8 @@
 //! panel for saved devices, tabs on top, a block terminal in the centre, and an
 //! editor-like command input panel at the bottom. No GTK, no webview.
 
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -3791,19 +3793,15 @@ impl App {
         self.dns_rx = Some(rx);
         self.dns_out = format!("resolving {host}…");
         std::thread::spawn(move || {
-            let out = std::process::Command::new("/usr/bin/nslookup")
+            let out = std::process::Command::new("nslookup")
                 .arg(&host)
                 .output()
                 .or_else(|_| {
-                    std::process::Command::new("/usr/bin/getent")
+                    std::process::Command::new("getent")
                         .args(["hosts", &host])
                         .output()
                 })
-                .or_else(|_| {
-                    std::process::Command::new("/bin/getent")
-                        .args(["hosts", &host])
-                        .output()
-                });
+                .or_else(|_| std::process::Command::new("host").arg(&host).output());
             let text = match out {
                 Ok(o) => {
                     let mut t = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -3825,12 +3823,17 @@ impl App {
         self.trace_rx = Some(rx);
         self.trace_out = format!("traceroute {host}…");
         std::thread::spawn(move || {
-            let out = std::process::Command::new("/usr/bin/traceroute")
+            let out = std::process::Command::new("traceroute")
                 .args(["-m", "20", "-w", "2", &host])
                 .output()
                 .or_else(|_| {
-                    std::process::Command::new("/usr/bin/tracepath")
+                    std::process::Command::new("tracepath")
                         .args(["-m", "20", &host])
+                        .output()
+                })
+                .or_else(|_| {
+                    std::process::Command::new("tracert")
+                        .args(["-h", "20", "-w", "2000", &host])
                         .output()
                 });
             let text = match out {
@@ -3851,9 +3854,7 @@ impl App {
         self.ping_rx = Some(rx);
         self.ping_out = format!("pinging {host}…");
         std::thread::spawn(move || {
-            let out = std::process::Command::new("/bin/ping")
-                .args(["-c", &count.to_string(), "-W", "2", &host])
-                .output();
+            let out = ping_command(&host, count).output();
             let text = match out {
                 Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
                 Err(e) => format!("ping failed: {e}"),
@@ -4312,6 +4313,38 @@ impl App {
     }
 }
 
+fn ping_command(host: &str, count: u32) -> std::process::Command {
+    let mut command = std::process::Command::new("ping");
+    #[cfg(target_os = "windows")]
+    command.args(["-n", &count.to_string(), "-w", "2000", host]);
+    #[cfg(target_os = "macos")]
+    command.args(["-c", &count.to_string(), "-W", "2000", host]);
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    command.args(["-c", &count.to_string(), "-W", "2", host]);
+    command
+}
+
+fn runtime_rss_mib() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("VmRSS:"))
+                    .and_then(|value| value.split_whitespace().next())
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+            .unwrap_or(0)
+            / 1024
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
 fn primary_key_label() -> &'static str {
     if cfg!(target_os = "macos") {
         "Cmd"
@@ -4322,22 +4355,17 @@ fn primary_key_label() -> &'static str {
 
 fn install_fonts(ctx: &egui::Context, terminal_path: Option<&std::path::Path>) {
     let mut defs = egui::FontDefinitions::empty();
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let data_home = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| home.as_ref().map(|home| home.join(".local/share")));
     let mut sans = Vec::new();
-    for dir in data_home.iter() {
-        sans.push(dir.join("fonts/Inter-Regular.ttf"));
-    }
-    if let Some(home) = &home {
-        sans.push(home.join(".fonts/Inter-Regular.ttf"));
+    for dir in opsterm_core::platform::font_dirs() {
+        sans.push(dir.join("Inter-Regular.ttf"));
     }
     for path in [
         "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
         "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
     ] {
         sans.push(std::path::PathBuf::from(path));
     }
@@ -4909,15 +4937,7 @@ impl App {
             }
         }
         if self.runtime_rss_mib == 0 || self.last_memory_check.elapsed() >= Duration::from_secs(1) {
-            if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-                self.runtime_rss_mib = status
-                    .lines()
-                    .find_map(|line| line.strip_prefix("VmRSS:"))
-                    .and_then(|value| value.split_whitespace().next())
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0)
-                    / 1024;
-            }
+            self.runtime_rss_mib = runtime_rss_mib();
             self.last_memory_check = Instant::now();
             self.check_vault_expiry();
         }
@@ -7241,13 +7261,7 @@ fn save_scratch(notes: &[String]) {
 }
 
 fn data_dir() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                .join(".local/share")
-        });
-    base.join("org.opsterm.app")
+    opsterm_core::platform::data_dir().join("org.opsterm.app")
 }
 
 fn main() -> eframe::Result<()> {
@@ -7288,7 +7302,9 @@ fn main() -> eframe::Result<()> {
         startup::Launch::Telnet { spec, title } => app.open_telnet_console(spec, title),
         _ => app.new_local(),
     }
+    #[allow(unused_mut)]
     let mut options = native_options(window_title);
+    #[cfg(target_os = "linux")]
     match backend {
         display_backend::Backend::Auto => {}
         display_backend::Backend::X11 => {
@@ -7304,6 +7320,8 @@ fn main() -> eframe::Result<()> {
             }));
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = backend;
     eframe::run_native(
         "OpsTerm",
         options,

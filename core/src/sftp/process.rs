@@ -2,9 +2,8 @@
 
 use crate::error::{AppError, AppResult};
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc::{channel, Sender};
 use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
@@ -17,8 +16,9 @@ struct BatchChild {
 impl Drop for BatchChild {
     fn drop(&mut self) {
         if !self.finished {
-            // The child is deliberately not reaped until its pipes close, so
-            // its PID cannot be reused while we address its process group.
+            // Unix children are started in their own group so a shell wrapper
+            // cannot leave descendants behind. `kill` covers every platform.
+            #[cfg(unix)]
             unsafe {
                 libc::kill(-(self.child.id() as i32), libc::SIGKILL);
             }
@@ -28,100 +28,106 @@ impl Drop for BatchChild {
     }
 }
 
-fn nonblocking(fd: i32) -> io::Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+fn timeout_error() -> AppError {
+    AppError::Io(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "SFTP operation timed out",
+    ))
 }
 
-fn drain(reader: &mut impl Read, output: &mut Vec<u8>) -> io::Result<bool> {
-    let mut buf = [0; 8192];
-    // Continuous server output must not prevent checking the deadline.
-    for _ in 0..8 {
-        match reader.read(&mut buf) {
-            Ok(0) => return Ok(true),
-            Ok(n) => {
-                if output.len() + n > OUTPUT_LIMIT {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "SFTP output exceeds 8 MiB",
-                    ));
+fn limit_error() -> AppError {
+    AppError::Io(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "SFTP output exceeds 8 MiB",
+    ))
+}
+
+fn read_bounded(
+    mut reader: impl Read + Send + 'static,
+    stderr: bool,
+    tx: Sender<(bool, io::Result<Vec<u8>>)>,
+) {
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if output.len() + n > OUTPUT_LIMIT {
+                        let _ = tx.send((
+                            stderr,
+                            Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "SFTP output exceeds 8 MiB",
+                            )),
+                        ));
+                        return;
+                    }
+                    output.extend_from_slice(&buffer[..n]);
                 }
-                output.extend_from_slice(&buf[..n]);
+                Err(error) => {
+                    let _ = tx.send((stderr, Err(error)));
+                    return;
+                }
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
         }
-    }
-    Ok(false)
+        let _ = tx.send((stderr, Ok(output)));
+    });
 }
 
 pub(super) fn run(mut command: Command, input: &[u8], timeout: Duration) -> AppResult<Output> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
         .spawn()?;
     let mut process = BatchChild {
         child,
         finished: false,
     };
-    let mut stdin = process.child.stdin.take();
-    let mut stdout = process.child.stdout.take().expect("piped stdout");
-    let mut stderr = process.child.stderr.take().expect("piped stderr");
-    nonblocking(stdin.as_ref().expect("piped stdin").as_raw_fd())?;
-    nonblocking(stdout.as_raw_fd())?;
-    nonblocking(stderr.as_raw_fd())?;
-    let mut sent = 0;
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-    let (mut out_done, mut err_done) = (false, false);
+    let mut stdin = process.child.stdin.take().expect("piped stdin");
+    let stdout = process.child.stdout.take().expect("piped stdout");
+    let stderr = process.child.stderr.take().expect("piped stderr");
+    let (tx, rx) = channel();
+    read_bounded(stdout, false, tx.clone());
+    read_bounded(stderr, true, tx);
+    let input = input.to_vec();
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+
     let started = Instant::now();
-    loop {
-        if started.elapsed() >= timeout {
-            return Err(AppError::Io(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "SFTP operation timed out",
-            )));
-        }
-        if let Some(pipe) = stdin.as_mut() {
-            match pipe.write(&input[sent..]) {
-                Ok(n) => sent += n,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) => {}
-                Err(e) => return Err(e.into()),
+    let (mut out, mut err) = (None, None);
+    while out.is_none() || err.is_none() {
+        let remaining = timeout
+            .checked_sub(started.elapsed())
+            .ok_or_else(timeout_error)?;
+        match rx.recv_timeout(remaining) {
+            Ok((true, Ok(bytes))) => err = Some(bytes),
+            Ok((false, Ok(bytes))) => out = Some(bytes),
+            Ok((_, Err(error))) if error.kind() == io::ErrorKind::InvalidData => {
+                return Err(limit_error())
             }
-            if sent == input.len() {
-                stdin.take();
-            }
+            Ok((_, Err(error))) => return Err(error.into()),
+            Err(_) => return Err(timeout_error()),
         }
-        if !out_done {
-            out_done = drain(&mut stdout, &mut out)?;
-        }
-        if !err_done {
-            err_done = drain(&mut stderr, &mut err)?;
-        }
-        if out_done && err_done {
-            if let Some(status) = process.child.try_wait()? {
-                process.finished = true;
-                return Ok(Output {
-                    status,
-                    stdout: out,
-                    stderr: err,
-                });
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
     }
+    let status = process.child.wait()?;
+    process.finished = true;
+    Ok(Output {
+        status,
+        stdout: out.unwrap_or_default(),
+        stderr: err.unwrap_or_default(),
+    })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Instant;

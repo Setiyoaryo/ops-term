@@ -1,7 +1,16 @@
 //! Fixture-only helper for real cross-process secure-store checks.
 //! No password is accepted in argv, environment or files.
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("this fixture only runs on Linux");
+    std::process::exit(2);
+}
+
+#[cfg(target_os = "linux")]
 use opsterm_core::credential;
+#[cfg(target_os = "linux")]
 const FIXTURE: &str = "fixture-password";
+#[cfg(target_os = "linux")]
 fn main() {
     let mode = std::env::args().nth(1).expect("fixture operation");
     let name = std::env::args().nth(2).expect("unique fixture reference");

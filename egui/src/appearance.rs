@@ -39,17 +39,7 @@ pub struct FontOption {
 
 // Discover paths once; do not retain the bytes of unselected fonts.
 pub fn font_options() -> Vec<FontOption> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let data = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.as_ref().map(|home| home.join(".local/share")));
-    let mut dirs = Vec::new();
-    if let Some(data) = data {
-        dirs.push(data.join("fonts"));
-    }
-    if let Some(home) = home {
-        dirs.push(home.join(".fonts"));
-    }
+    let dirs = opsterm_core::platform::font_dirs();
     let jetbrains = |weight: &str| {
         let mut paths: Vec<_> = dirs
             .iter()
@@ -74,6 +64,8 @@ pub fn font_options() -> Vec<FontOption> {
             "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
             "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/SFNSMono.ttf",
         ]
         .map(PathBuf::from),
     );

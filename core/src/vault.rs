@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, Payload};
@@ -43,12 +42,9 @@ const T_COST: u32 = 2;
 const P_COST: u32 = 1;
 
 pub fn default_path() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
-        });
-    base.join("org.opsterm.app").join("vault.json")
+    crate::platform::data_dir()
+        .join("org.opsterm.app")
+        .join("vault.json")
 }
 
 pub fn is_initialized_at(path: &Path) -> bool {
@@ -432,12 +428,14 @@ fn save_file(path: &Path, file: &VaultFile) -> AppResult<()> {
     }
     let tmp = path.with_extension("json.tmp");
     {
-        let mut handle = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut handle = options.open(&tmp)?;
         handle.write_all(&serde_json::to_vec_pretty(file)?)?;
         handle.sync_all()?;
     }

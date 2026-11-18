@@ -26,7 +26,7 @@ pub fn spawn_sftp(
         "LANG",
         std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into()),
     );
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::platform::home_dir() {
         cmd.cwd(home);
     }
     Ok(Box::new(PtySession::spawn(cmd, dims)?))

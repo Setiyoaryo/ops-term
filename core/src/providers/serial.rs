@@ -4,6 +4,8 @@
 //! libudev dependency: devices are enumerated by scanning `/dev`. The port is
 //! held exclusively for the life of the session.
 
+#![cfg(unix)]
+
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::Shutdown;

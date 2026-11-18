@@ -31,7 +31,7 @@ pub fn spawn_openssh(
         "LANG",
         std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into()),
     );
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::platform::home_dir() {
         cmd.cwd(home);
     }
 
@@ -42,11 +42,13 @@ pub fn spawn_openssh(
     let mut askpass_dir: Option<PathBuf> = None;
     if let Some(password) = spec.password.as_deref().filter(|p| !p.is_empty()) {
         let dir = crate::askpass::create_askpass(password)?;
-        cmd.env(
-            "SSH_ASKPASS",
-            dir.join("askpass.sh").to_string_lossy().to_string(),
-        );
+        #[cfg(unix)]
+        let script = dir.join("askpass.sh");
+        #[cfg(not(unix))]
+        let script = dir.join("askpass.cmd");
+        cmd.env("SSH_ASKPASS", script.to_string_lossy().to_string());
         cmd.env("SSH_ASKPASS_REQUIRE", "force");
+        #[cfg(unix)]
         cmd.env(
             "DISPLAY",
             std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),

@@ -103,19 +103,28 @@ impl Drop for Monitor {
 
 fn main_probe(name: &str) -> String {
     // Only the kernel wait-function name or syscall number, never syscall args.
-    fs::read_to_string(format!("/proc/self/task/{}/{name}", std::process::id()))
-        .ok()
-        .and_then(|text| text.split_whitespace().next().map(str::to_owned))
-        .filter(|text| {
-            text.len() <= 80
-                && text
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
-        })
-        .unwrap_or_else(|| "unavailable".into())
+    #[cfg(target_os = "linux")]
+    {
+        fs::read_to_string(format!("/proc/self/task/{}/{name}", std::process::id()))
+            .ok()
+            .and_then(|text| text.split_whitespace().next().map(str::to_owned))
+            .filter(|text| {
+                text.len() <= 80
+                    && text
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+            })
+            .unwrap_or_else(|| "unavailable".into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = name;
+        "unavailable".into()
+    }
 }
 
 fn open_log(directory: &std::path::Path, run_id: u128) -> std::io::Result<File> {
+    #[allow(unused_mut)]
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -162,9 +171,12 @@ fn prune_logs(directory: &std::path::Path) {
             stamp.parse::<u128>().ok()?;
             let pid = pid.parse::<u32>().ok()?;
             // Keep live processes' evidence, even if several application windows exist.
+            #[cfg(target_os = "linux")]
             if std::path::Path::new(&format!("/proc/{pid}")).exists() {
                 return None;
             }
+            #[cfg(not(target_os = "linux"))]
+            let _ = pid;
             Some((name, entry.path()))
         })
         .collect();

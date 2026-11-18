@@ -9,6 +9,10 @@
 pub mod local_pty;
 pub mod openssh_pty;
 pub mod russh_ssh;
+#[cfg(unix)]
+pub mod serial;
+#[cfg(not(unix))]
+#[path = "serial_stub.rs"]
 pub mod serial;
 pub mod sftp_pty;
 pub mod telnet;

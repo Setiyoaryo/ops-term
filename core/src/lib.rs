@@ -10,6 +10,7 @@ pub mod credential;
 pub mod domain;
 pub mod error;
 pub mod logging;
+pub mod platform;
 pub mod providers;
 pub mod security;
 pub mod sftp;

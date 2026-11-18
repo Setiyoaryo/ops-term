@@ -323,12 +323,9 @@ fn public_key_text() -> &'static str {
 }
 
 fn config_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-        });
-    base.join("org.opsterm.app").join("update.json")
+    opsterm_core::platform::config_dir()
+        .join("org.opsterm.app")
+        .join("update.json")
 }
 
 fn load_config() -> UpdateConfig {
@@ -642,12 +639,35 @@ fn download_and_verify(available: &Available) -> Result<Vec<u8>, String> {
 }
 
 fn validate_executable_format(bytes: &[u8], asset_key: &str) -> Result<(), String> {
-    if !bytes.starts_with(b"\x7fELF") {
-        return Err("downloaded update is not a Linux executable".into());
-    }
-    let appimage = crate::distribution::is_appimage_bytes(bytes);
-    if appimage != asset_key.ends_with("-appimage") {
-        return Err("downloaded update format does not match its signed asset key".into());
+    let platform = asset_key.split('-').next().unwrap_or_default();
+    match platform {
+        "linux" => {
+            if !bytes.starts_with(b"\x7fELF") {
+                return Err("downloaded update is not a Linux executable".into());
+            }
+            let appimage = crate::distribution::is_appimage_bytes(bytes);
+            if appimage != asset_key.ends_with("-appimage") {
+                return Err("downloaded update format does not match its signed asset key".into());
+            }
+        }
+        "macos" => {
+            // Mach-O 64-bit little-endian, or a fat/universal container.
+            let macho = [0xCF, 0xFA, 0xED, 0xFE];
+            let fatle = [0xBE, 0xBA, 0xFE, 0xCA];
+            let fatbe = [0xCA, 0xFE, 0xBA, 0xBE];
+            if !(bytes.starts_with(&macho)
+                || bytes.starts_with(&fatle)
+                || bytes.starts_with(&fatbe))
+            {
+                return Err("downloaded update is not a macOS executable".into());
+            }
+        }
+        "windows" => {
+            if !bytes.starts_with(b"MZ") {
+                return Err("downloaded update is not a Windows executable".into());
+            }
+        }
+        _ => return Err("downloaded update has an unknown platform key".into()),
     }
     Ok(())
 }
@@ -841,14 +861,31 @@ fn install_bytes_unlocked(
         let _ = fs::remove_file(&temporary);
         return Err(error);
     }
-    let _ = fs::remove_file(&backup);
-    if let Err(error) = fs::hard_link(executable, &backup) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!("cannot create a rollback copy: {error}"));
+    #[cfg(unix)]
+    {
+        let _ = fs::remove_file(&backup);
+        if let Err(error) = fs::hard_link(executable, &backup) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot create a rollback copy: {error}"));
+        }
+        if let Err(error) = fs::rename(&temporary, executable) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot replace the executable: {error}"));
+        }
     }
-    if let Err(error) = fs::rename(&temporary, executable) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!("cannot replace the executable: {error}"));
+    // Windows refuses to replace a running image but does allow renaming it.
+    #[cfg(not(unix))]
+    {
+        let _ = fs::remove_file(&backup);
+        if let Err(error) = fs::rename(executable, &backup) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot move the running executable aside: {error}"));
+        }
+        if let Err(error) = fs::rename(&temporary, executable) {
+            let _ = fs::remove_file(&temporary);
+            let _ = fs::rename(&backup, executable);
+            return Err(format!("cannot replace the executable: {error}"));
+        }
     }
     Ok(executable.to_path_buf())
 }
@@ -972,6 +1009,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn installer_refuses_symlink_lock_without_touching_target() {
         let root = test_directory("lock-symlink");
@@ -1207,6 +1245,7 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
     }
 
+    #[cfg(unix)]
     #[test]
     fn refuses_to_replace_a_symlink() {
         let directory = std::env::temp_dir().join(format!(

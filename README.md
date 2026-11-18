@@ -1,9 +1,10 @@
 # OpsTerm
 
-A Linux-first, open-source terminal workspace for network operations: connect to
-routers, switches, OLTs, firewalls and servers at scale with real SSH, local
-shells, Telnet and serial sessions, an organised device library, and safe
-multi-session workflows.
+An open-source terminal workspace for network operations: connect to routers,
+switches, OLTs, firewalls and servers at scale with real SSH, local shells,
+Telnet and serial sessions, an organised device library, and safe multi-session
+workflows. Linux is the primary target; macOS and Windows portable previews are
+built from the same egui client.
 
 > **Status:** the feature set spans M1–M3 and beyond. See
 > [`FEATURE_STATUS.md`](FEATURE_STATUS.md) for exactly what is real vs planned.
@@ -11,6 +12,16 @@ multi-session workflows.
 
 OpsTerm is an **independent** terminal workspace for network operations,
 built with original code, assets and branding.
+
+## macOS and Windows previews
+
+Unsigned portable builds are produced for **macOS aarch64/x86_64** (zip with
+`OpsTerm.app`, plus the raw binary used by the in-app updater) and
+**Windows x86_64** (`opsterm-egui.exe` plus a zip). macOS uses Keychain, Windows
+uses Credential Manager, and both reuse the signed update manifest. Gatekeeper
+and SmartScreen may warn because the previews are not notarized or
+code-signed yet. Windows has no serial-console support. See
+[`docs/releases/v0.1.19.md`](docs/releases/v0.1.19.md).
 
 ## Portable Linux packages
 

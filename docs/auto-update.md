@@ -6,9 +6,12 @@ The egui client checks this stable HTTPS feed by default:
 https://github.com/Setiyoaryo/ops-term/releases/latest/download/manifest.json
 ```
 
-Each published stable release contains the Linux x86_64 binary, SHA-256 file,
-Ed25519 signature and `manifest.json`. The manifest references version-specific
-GitHub asset URLs; the `latest` URL selects the newest stable manifest.
+Each published stable release contains Linux x86_64/aarch64 binaries, the
+macOS aarch64/x86_64 and Windows x86_64 portable artifacts, SHA-256 files,
+Ed25519 signatures and one `manifest.json`. The manifest references
+version-specific GitHub asset URLs; the `latest` URL selects the newest stable
+manifest. The app picks the asset key for its own OS/architecture, so the same
+feed serves every platform.
 
 ## App behavior
 
@@ -25,7 +28,10 @@ configured local `file://` development feeds.
 The manifest URL resolves in this order:
 
 1. Nonempty `OPSTERM_UPDATE_URL` override.
-2. A nonempty `manifest_url` in `~/.config/org.opsterm.app/update.json`.
+2. A nonempty `manifest_url` in the per-user config directory (Linux:
+   `~/.config/org.opsterm.app/update.json`, macOS:
+   `~/Library/Application Support/org.opsterm.app/update.json`, Windows:
+   `%APPDATA%\org.opsterm.app\update.json`).
 3. The GitHub feed above.
 
 The `auto_check` preference is preserved, including when a config omits other

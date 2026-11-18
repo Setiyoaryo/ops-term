@@ -120,6 +120,103 @@ jobs:
           flock -n .opsterm-build.lock bash scripts/clean.sh --dist
           test ! -d target
 
+  build-macos:
+    if: github.repository == 'Setiyoaryo/ops-term'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: aarch64
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '1'
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+      - name: Validate trusted release tag
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor HEAD origin/main
+          python3 -c 'import sys; from scripts.package_egui import version, validate_release_tag; validate_release_tag(sys.argv[1], version())' "$RELEASE_TAG"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: 1.94.1
+          targets: ${{ matrix.target }}
+      - name: Build and package macOS binary
+        run: |
+          cargo build -p opsterm-egui --release --locked --target "${{ matrix.target }}"
+          python3 -m scripts.package_platform \
+            --binary "target/${{ matrix.target }}/release/opsterm-egui" \
+            --version "$(python3 -c 'from scripts.package_egui import version; print(version())')" \
+            --platform macos --arch "${{ matrix.arch }}" --output release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release/
+          retention-days: 2
+          if-no-files-found: error
+      - name: Clean caches
+        if: always()
+        run: |
+          bash scripts/clean.sh --dist
+          test ! -d target
+
+  build-windows:
+    if: github.repository == 'Setiyoaryo/ops-term'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '1'
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+      - name: Validate trusted release tag
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor HEAD origin/main
+          python -c 'import sys; from scripts.package_egui import version, validate_release_tag; validate_release_tag(sys.argv[1], version())' "$RELEASE_TAG"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: 1.94.1
+      - name: Build and package Windows binary
+        shell: bash
+        run: |
+          cargo build -p opsterm-egui --release --locked
+          python -m scripts.package_platform \
+            --binary "target/release/opsterm-egui.exe" \
+            --version "$(python -c 'from scripts.package_egui import version; print(version())')" \
+            --platform windows --arch x86_64 --output release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-x86_64
+          path: release/
+          retention-days: 2
+          if-no-files-found: error
+      - name: Clean private material and caches
+        if: always()
+        shell: bash
+        run: |
+          bash scripts/clean.sh --dist
+          test ! -d target
+
   compatibility:
     needs: build
     runs-on: ubuntu-24.04
@@ -148,7 +245,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
-    needs: [build, compatibility]
+    needs: [build, build-macos, build-windows, compatibility]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -163,10 +260,27 @@ jobs:
           ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: linux-*
+          pattern: '*'
           path: artifacts
+      - name: Materialize signing key
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        shell: bash
+        run: |
+          umask 077
+          cat > "$RUNNER_TEMP/opsterm-signing.key" <<'OPSTERM_SIGNING_KEY_EOF'
+          ${{ secrets.OPSTERM_UPDATE_SIGNING_KEY }}
+          OPSTERM_SIGNING_KEY_EOF
+          test -s "$RUNNER_TEMP/opsterm-signing.key"
       - name: Verify signatures and assemble complete release
-        run: python3 -m scripts.merge_release --input artifacts/linux-x86_64 --input artifacts/linux-aarch64 --output release
+        run: |
+          python3 -m scripts.merge_release \
+            --input artifacts/linux-x86_64 \
+            --input artifacts/linux-aarch64 \
+            --input artifacts/macos-aarch64 \
+            --input artifacts/macos-x86_64 \
+            --input artifacts/windows-x86_64 \
+            --key "$RUNNER_TEMP/opsterm-signing.key" \
+            --output release
       - name: Initialize temporary publishing configuration
         run: printf 'GH_CONFIG_DIR=%s/opsterm-gh\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Materialize scoped publishing credential
@@ -184,5 +298,6 @@ jobs:
         if: always()
         run: |
           rm -rf "$GH_CONFIG_DIR"
+          rm -f "$RUNNER_TEMP/opsterm-signing.key"
           if pgrep -af 'cargo|vite|build_guard'; then exit 1; fi
           flock -n .opsterm-build.lock bash scripts/clean.sh --dist

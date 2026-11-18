@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use russh::client::{self, Handle};
+#[cfg(unix)]
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{check_known_hosts_path, load_secret_key, PrivateKeyWithHashAlg};
 use russh::{Channel, ChannelMsg, Disconnect};
@@ -129,10 +130,10 @@ pub struct RusshSession {
 }
 
 fn known_hosts_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".ssh").join("known_hosts")
+    crate::platform::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ssh")
+        .join("known_hosts")
 }
 
 /// Resolve the identity key to use: explicit path, else the first existing
@@ -142,9 +143,7 @@ fn resolve_identity(spec: &SshSpec) -> AppResult<PathBuf> {
         let validated = crate::security::validate_identity_file(path)?;
         return Ok(PathBuf::from(validated));
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let home = crate::platform::home_dir().unwrap_or_else(|| PathBuf::from("."));
     for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
         let candidate = home.join(".ssh").join(name);
         if candidate.is_file() {
@@ -296,6 +295,7 @@ async fn run_session(
 
         // Authenticate: try the agent first, then the identity key.
         let mut authenticated = false;
+        #[cfg(unix)]
         if let Ok(mut agent) = AgentClient::connect_env().await {
             let identities = agent.request_identities().await.unwrap_or_default();
             for key in identities {

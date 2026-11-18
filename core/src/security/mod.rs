@@ -13,9 +13,30 @@ use crate::error::{AppError, AppResult};
 /// Absolute locations we are willing to execute for the SSH client, in
 /// preference order. We never search `PATH` implicitly for ssh, because a
 /// hostile `PATH` entry could redirect execution (PRD FR-01).
-const SSH_CANDIDATES: &[&str] = &["/usr/bin/ssh", "/usr/local/bin/ssh", "/bin/ssh"];
-const SFTP_CANDIDATES: &[&str] = &["/usr/bin/sftp", "/usr/local/bin/sftp", "/bin/sftp"];
-const SCP_CANDIDATES: &[&str] = &["/usr/bin/scp", "/usr/local/bin/scp", "/bin/scp"];
+const SSH_CANDIDATES: &[&str] = &[
+    "/usr/bin/ssh",
+    "/usr/local/bin/ssh",
+    "/opt/homebrew/bin/ssh",
+    "/bin/ssh",
+    r"C:\Windows\System32\OpenSSH\ssh.exe",
+    r"C:\Program Files\OpenSSH\ssh.exe",
+];
+const SFTP_CANDIDATES: &[&str] = &[
+    "/usr/bin/sftp",
+    "/usr/local/bin/sftp",
+    "/opt/homebrew/bin/sftp",
+    "/bin/sftp",
+    r"C:\Windows\System32\OpenSSH\sftp.exe",
+    r"C:\Program Files\OpenSSH\sftp.exe",
+];
+const SCP_CANDIDATES: &[&str] = &[
+    "/usr/bin/scp",
+    "/usr/local/bin/scp",
+    "/opt/homebrew/bin/scp",
+    "/bin/scp",
+    r"C:\Windows\System32\OpenSSH\scp.exe",
+    r"C:\Program Files\OpenSSH\scp.exe",
+];
 
 /// Validate a hostname, IPv4, IPv6 literal, bracketed IPv6 literal, or
 /// `~/.ssh/config` alias.
@@ -171,12 +192,12 @@ pub fn validate_proxy_jump(value: &str) -> AppResult<String> {
 
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return Path::new(&home).join(rest);
+        if let Some(home) = crate::platform::home_dir() {
+            return home.join(rest);
         }
     } else if path == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = crate::platform::home_dir() {
+            return home;
         }
     }
     PathBuf::from(path)
@@ -194,7 +215,7 @@ pub fn resolve_ssh_binary() -> AppResult<String> {
         }
     }
     Err(AppError::Validation(
-        "OpenSSH client not found. Install it with: sudo apt install openssh-client".into(),
+        "OpenSSH client not found. Install the OpenSSH client and retry.".into(),
     ))
 }
 
@@ -210,7 +231,7 @@ fn resolve_binary(candidates: &[&str], what: &str) -> AppResult<String> {
         }
     }
     Err(AppError::Validation(format!(
-        "{what} client not found. Install it with: sudo apt install openssh-client"
+        "{what} client not found. Install the OpenSSH client and retry."
     )))
 }
 
@@ -304,9 +325,31 @@ pub fn resolve_local_shell() -> AppResult<String> {
             return Ok(shell.to_string_lossy().into_owned());
         }
     }
-    for candidate in ["/bin/bash", "/bin/sh"] {
-        if Path::new(candidate).is_file() {
-            return Ok(candidate.to_string());
+    #[cfg(windows)]
+    {
+        if let Some(shell) = std::env::var_os("COMSPEC") {
+            let shell = PathBuf::from(&shell);
+            if shell.is_absolute() && shell.is_file() {
+                return Ok(shell.to_string_lossy().into_owned());
+            }
+        }
+        for candidate in [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"] {
+            if Path::new(candidate).is_file() {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for candidate in [
+            "/bin/bash",
+            "/bin/sh",
+            "/usr/local/bin/bash",
+            "/opt/homebrew/bin/bash",
+        ] {
+            if Path::new(candidate).is_file() {
+                return Ok(candidate.to_string());
+            }
         }
     }
     Err(AppError::Validation("no usable local shell found".into()))

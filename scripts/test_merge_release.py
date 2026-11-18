@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from scripts import merge_release
 
 class MergeTests(unittest.TestCase):
@@ -41,6 +42,35 @@ class MergeTests(unittest.TestCase):
             output=root/'out';merge_release.merge(inputs,output,'0.1.6',public)
             self.assertEqual(len(json.loads((output/'manifest.json').read_text())['assets']),6)
             self.assertEqual(len(list(output.iterdir())),19)
+
+    def test_unsigned_macos_and_windows_directories_are_signed_and_merged(self):
+        import subprocess
+        from scripts.package_egui import raw_public_key
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); private=root/'key.pem'
+            subprocess.run(['openssl','genpkey','-algorithm','Ed25519','-out',str(private)],check=True,capture_output=True)
+            inputs=[]
+            macho=b'\xcf\xfa\xed\xfe'+b'\0'*60; pe=b'MZ'+b'\0'*62
+            for platform, arch, payload, archive, member in (
+                ('macos','aarch64',macho,'-app','OpsTerm.app/Contents/MacOS/opsterm-egui'),
+                ('macos','x86_64',macho,'-app','OpsTerm.app/Contents/MacOS/opsterm-egui'),
+                ('windows','x86_64',pe,'-zip','opsterm-egui.exe'),
+            ):
+                directory=root/(platform+'-'+arch);directory.mkdir();inputs.append(directory)
+                from scripts.release_layout import asset_key, asset_name
+                version='0.1.9'
+                raw=directory/asset_name(version,asset_key(platform,arch));raw.write_bytes(payload)
+                bundle=directory/asset_name(version,asset_key(platform,arch,archive))
+                with zipfile.ZipFile(bundle,'w') as archive_file:
+                    archive_file.writestr(member,payload)
+                (directory/'platform.json').write_text(json.dumps({'version':version,'platform':platform,'arch':arch}))
+            output=root/'out';merge_release.merge(inputs,output,'0.1.9',raw_public_key(private),private)
+            manifest=json.loads((output/'manifest.json').read_text())
+            self.assertEqual(len(manifest['assets']),6)
+            self.assertIn('macos-aarch64-app',manifest['assets'])
+            self.assertIn('windows-x86_64-zip',manifest['assets'])
+            for key, asset in manifest['assets'].items():
+                merge_release.verify_asset(output/asset['url'].rsplit('/',1)[1],'0.1.9',key,asset,raw_public_key(private))
 
     def test_manifest_requires_complete_architecture_and_format_set(self):
         with tempfile.TemporaryDirectory() as folder:

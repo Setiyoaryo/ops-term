@@ -50,7 +50,13 @@ def release_files(directory: Path, release_version: str) -> list[Path]:
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("version") != release_version or not manifest.get("assets"):
         raise ValueError("manifest version/assets do not match the release")
-    pattern = re.compile(r"opsterm-egui-" + re.escape(release_version) + r"-linux-(?:x86_64|aarch64)(?:\.AppImage|\.tar\.gz)?")
+    pattern = re.compile(
+        r"opsterm-egui-"
+        + re.escape(release_version)
+        + r"-(?:linux-(?:x86_64|aarch64)(?:\.AppImage|\.tar\.gz)?"
+        r"|macos-(?:x86_64|aarch64)(?:-app\.zip)?"
+        r"|windows-x86_64(?:\.exe|\.zip)?)"
+    )
     files = [manifest_path]
     names = set()
     for asset in manifest["assets"].values():

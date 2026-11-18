@@ -23,7 +23,7 @@ chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 vte = "0.15"
 libc = "0.2"
-keyring = { version = "3", features = ["linux-native", "sync-secret-service", "crypto-rust"] }
+keyring = { version = "3", default-features = false, features = ["crypto-rust"] }
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync", "macros"] }
 
@@ -33,3 +33,10 @@ tempfile = "3"
 # Embed D-Bus to avoid distro-specific libdbus/libsystemd ABI dependencies.
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = { version = "0.9", features = ["vendored"] }
+keyring = { version = "3", default-features = false, features = ["linux-native", "sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }

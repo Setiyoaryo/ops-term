@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use crate::error::AppResult;
 
 /// Create a private askpass helper directory and return its path.
+#[cfg(unix)]
 pub fn create_askpass(password: &str) -> AppResult<PathBuf> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -50,6 +51,42 @@ pub fn create_askpass(password: &str) -> AppResult<PathBuf> {
     Ok(dir)
 }
 
+/// Create an askpass helper for Windows OpenSSH.
+///
+/// Windows has no `0600` mode bits; the helper lives under `%TEMP%`, and only
+/// the password prompt is answered. All other prompts fail so host-key
+/// verification still surfaces in the terminal.
+#[cfg(not(unix))]
+pub fn create_askpass(password: &str) -> AppResult<PathBuf> {
+    use std::io::Write;
+
+    let dir = std::env::temp_dir().join(format!("opsterm-askpass-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir)?;
+
+    let pass_path = dir.join("pass");
+    let mut pass = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&pass_path)?;
+    pass.write_all(password.as_bytes())?;
+    pass.flush()?;
+
+    let script_path = dir.join("askpass.cmd");
+    let mut script = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&script_path)?;
+    script.write_all(
+        format!(
+            "@echo off\r\necho %1 | findstr /I \"assword\" >nul\r\nif errorlevel 1 exit /b 1\r\ntype \"{}\"\r\n",
+            pass_path.display()
+        )
+        .as_bytes(),
+    )?;
+    script.flush()?;
+    Ok(dir)
+}
+
 /// Apply the askpass environment to a command when a password is present.
 pub fn apply_askpass(
     command: &mut std::process::Command,
@@ -57,8 +94,13 @@ pub fn apply_askpass(
 ) -> Option<PathBuf> {
     let password = password.filter(|p| !p.is_empty())?;
     let dir = create_askpass(password).ok()?;
-    command.env("SSH_ASKPASS", dir.join("askpass.sh"));
+    #[cfg(unix)]
+    let script = dir.join("askpass.sh");
+    #[cfg(not(unix))]
+    let script = dir.join("askpass.cmd");
+    command.env("SSH_ASKPASS", script);
     command.env("SSH_ASKPASS_REQUIRE", "force");
+    #[cfg(unix)]
     command.env(
         "DISPLAY",
         std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),
@@ -66,7 +108,7 @@ pub fn apply_askpass(
     Some(dir)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
