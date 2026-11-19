@@ -12,7 +12,7 @@ test.afterEach(() => expect(errors).toEqual([]));
 
 test('real release links, responsive layout and accessible navigation', async ({ page }, info) => {
   await expect(page.getByRole('heading', { level: 1 })).toContainText('Every connection.');
-  await expect(page.getByRole('link', { name: 'Download for Linux' })).toHaveAttribute('href', /https:\/\/github.com\/Setiyoaryo\/ops-term\/releases\/download\/v\d+\.\d+\.\d+\/opsterm-egui-/);
+  await expect(page.getByRole('link', { name: 'Download OpsTerm' })).toHaveAttribute('href', '#install');
   await page.screenshot({ path: `/tmp/opsterm-pages-verification/${info.project.name}-hero.png` });
   const menu = page.getByRole('button', { name: 'Open navigation' });
   if (await menu.isVisible()) {
@@ -35,6 +35,17 @@ test('palette and session previews work with keyboard tabs', async ({ page }) =>
   await page.getByRole('tab', { name: 'Local shell' }).press('ArrowLeft');
   await expect(page.getByRole('tab', { name: 'edge-01' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('tabpanel', { name: 'edge-01' })).toContainText('show interfaces status');
+});
+
+test('platform picker exposes macOS and Windows downloads', async ({ page }) => {
+  const select = page.getByLabel('Platform');
+  await select.selectOption('windows-x86_64');
+  await expect(page.locator('#commands-download code')).toContainText('certutil');
+  await expect(page.locator('[data-install-note]')).toContainText('SmartScreen');
+  await expect(page.locator('.closing [data-download]')).toHaveAttribute('href', /windows-x86_64\.exe$/);
+  await select.selectOption('macos-aarch64');
+  await expect(page.locator('#commands-download code')).toContainText('xattr');
+  await expect(page.locator('[data-install-note]')).toContainText('Gatekeeper');
 });
 
 test('installation copy matches selected tab and status resets', async ({ page }) => {

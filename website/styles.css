@@ -710,6 +710,39 @@ h3 {
   font-size:9px;
   padding-right:18px;
   color:var(--subtle)}
+.platform-picker {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+  padding:11px 20px;
+  border-bottom:1px solid var(--line);
+  font-size:9px;
+  color:var(--subtle)}
+.platform-picker[hidden] {
+  display:none}
+.platform-picker label {
+  text-transform:uppercase;
+  letter-spacing:.08em}
+.platform-picker select {
+  appearance:none;
+  background-color:var(--bg);
+  background-image:linear-gradient(45deg, transparent 50%, var(--subtle) 50%), linear-gradient(135deg, var(--subtle) 50%, transparent 50%);
+  background-position:calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size:5px 5px, 5px 5px;
+  background-repeat:no-repeat;
+  border:1px solid var(--line);
+  color:var(--ink);
+  font:10px var(--font);
+  padding:7px 28px 7px 10px;
+  min-width:190px;
+  cursor:pointer}
+.platform-picker select:focus-visible {
+  outline:1px solid var(--accent);
+  outline-offset:2px}
+.platform-picker .inline-link {
+  margin-left:auto;
+  font-size:9px}
 .command-toolbar {
   display:flex;
   align-items:center;
@@ -1210,6 +1243,15 @@ h2 {
 .install-tabs>button {
   font-size:8px;
   padding:12px 11px}
+.platform-picker {
+  gap:8px;
+  padding:10px 13px}
+.platform-picker select {
+  font-size:9px;
+  min-width:0;
+  flex:1}
+.platform-picker .inline-link {
+  margin-left:0}
 .install-tabs>span {
   font-size:7px;
   padding-right:10px}

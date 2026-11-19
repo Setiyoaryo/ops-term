@@ -17,6 +17,15 @@ REPOSITORY = "Setiyoaryo/ops-term"
 RELEASES = f"https://github.com/{REPOSITORY}/releases"
 
 
+PLATFORMS = {
+    "LINUX_X86_64": ("linux-x86_64", ""),
+    "LINUX_AARCH64": ("linux-aarch64", ""),
+    "MACOS_AARCH64": ("macos-aarch64", "-app.zip"),
+    "MACOS_X86_64": ("macos-x86_64", "-app.zip"),
+    "WINDOWS_X86_64": ("windows-x86_64", ".exe"),
+}
+
+
 def normalize_release(payload: dict) -> dict[str, str]:
     tag = payload.get("tag_name", "")
     if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
@@ -24,16 +33,24 @@ def normalize_release(payload: dict) -> dict[str, str]:
     if payload.get("draft") or payload.get("prerelease"):
         raise ValueError("draft/prerelease downloads cannot be advertised as stable")
     version = tag[1:]
-    name = f"opsterm-egui-{version}-linux-x86_64"
-    expected_url = f"{RELEASES}/download/{tag}/{name}"
-    asset = next((item for item in payload.get("assets", []) if item.get("name") == name), None)
-    if asset is None or asset.get("browser_download_url") != expected_url:
-        raise ValueError("download must be the expected official Linux release asset")
-    return {
-        "VERSION": version, "TAG": tag, "ASSET_NAME": name,
-        "DOWNLOAD_URL": expected_url, "RELEASE_URL": f"{RELEASES}/tag/{tag}",
+    assets = {item.get("name"): item for item in payload.get("assets", [])}
+    values = {
+        "VERSION": version,
+        "TAG": tag,
+        "RELEASE_URL": f"{RELEASES}/tag/{tag}",
         "UPDATE_URL": f"{RELEASES}/latest/download/manifest.json",
     }
+    for key, (suffix, extension) in PLATFORMS.items():
+        name = f"opsterm-egui-{version}-{suffix}{extension}"
+        expected_url = f"{RELEASES}/download/{tag}/{name}"
+        asset = assets.get(name)
+        if asset is None or asset.get("browser_download_url") != expected_url:
+            raise ValueError(f"download must be the expected official release asset: {name}")
+        values[f"{key}_NAME"] = name
+        values[f"{key}_URL"] = expected_url
+    values["ASSET_NAME"] = values["LINUX_X86_64_NAME"]
+    values["DOWNLOAD_URL"] = values["LINUX_X86_64_URL"]
+    return values
 
 
 def render_template(template: str, values: dict[str, str]) -> str:

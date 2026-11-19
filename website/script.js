@@ -75,14 +75,44 @@ const sessionButtons = [...document.querySelectorAll('button[data-session]')];
 enableKeyboardTabs(sessionButtons, button => selectTab(sessionButtons, button, 'session'));
 
 const installButtons = [...document.querySelectorAll('button[data-install]')];
+const platformPicker = document.getElementById('platform-picker');
+const platformSelect = document.getElementById('platform-select');
+const downloadCode = document.querySelector('#commands-download code');
+const installNote = document.querySelector('[data-install-note]');
+const copyStatus = document.querySelector('.copy-status');
 let installMethod = 'download';
+
+function platformCommand(kind, url, name) {
+  if (kind.startsWith('linux')) {
+    return `curl -fLO '${url}' &&\ncurl -fLO '${url}.sha256' &&\nsha256sum -c '${name}.sha256' &&\ninstall -Dm755 '${name}' "$HOME/.local/bin/opsterm-egui"`;
+  }
+  if (kind.startsWith('macos')) {
+    return `curl -fLO '${url}' &&\ncurl -fLO '${url}.sha256' &&\nshasum -a 256 -c '${name}.sha256' &&\nunzip -oq '${name}' -d OpsTerm &&\nxattr -dr com.apple.quarantine 'OpsTerm/OpsTerm.app' &&\nopen 'OpsTerm/OpsTerm.app'`;
+  }
+  return `curl -fLO '${url}'\ncurl -fLO '${url}.sha256'\ntype '${name}.sha256'\ncertutil -hashfile '${name}' SHA256`;
+}
+
+function applyPlatform() {
+  const option = platformSelect?.selectedOptions?.[0];
+  if (!option || !downloadCode) return;
+  downloadCode.textContent = platformCommand(option.value, option.dataset.url, option.dataset.name);
+  if (installMethod === 'download') installNote.textContent = option.dataset.note;
+  const closing = document.querySelector('.closing [data-download]');
+  if (closing && option.dataset.url) closing.href = option.dataset.url;
+  if (copyStatus) copyStatus.textContent = '';
+}
+
+platformSelect?.addEventListener('change', applyPlatform);
+applyPlatform();
+
 enableKeyboardTabs(installButtons, (button) => {
   installMethod = selectTab(installButtons, button, 'install');
-  document.querySelector('[data-command-label]').textContent = installMethod === 'download' ? 'verify, then install' : 'clone, build, make it yours';
-  document.querySelector('[data-install-note]').textContent = installMethod === 'download'
-    ? 'Ubuntu 24.04 · x86_64 · curl + CA certificates for updates.'
-    : 'Requires Rust, Node/npm and Linux build dependencies. See requirements below.';
-  document.querySelector('.copy-status').textContent = '';
+  const downloading = installMethod === 'download';
+  platformPicker.hidden = !downloading;
+  document.querySelector('[data-command-label]').textContent = downloading ? 'verify, then run' : 'clone, build, make it yours';
+  if (downloading) applyPlatform();
+  else installNote.textContent = 'Requires Rust, Node/npm and Linux build dependencies. See requirements below.';
+  copyStatus.textContent = '';
   clearTimeout(copyTimeout);
   copyButton.textContent = 'Copy ⧉';
 });
