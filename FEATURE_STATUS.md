@@ -1,3 +1,5 @@
+19 November 2026 — v0.1.20: palette koneksi `Ctrl+T` dengan pencarian nama/host/user/tag yang mengabaikan spasi dan tanda baca (`pe ktt` cocok dengan `PE-KTT-01`) serta quick connect `user@host`; folder baru langsung tampil tanpa device. 174 test egui lulus. [Catatan rilis](docs/releases/v0.1.20.md).
+
 18 November 2026 — v0.1.19: build portabel macOS (aarch64/x86_64) dan Windows (x86_64) ditambahkan; Keychain/Credential Manager, updater Windows dengan rename-lalu-restart, dan manifest pembaruan tunggal. Build belum di-notarize/di-code-sign. [Catatan rilis](docs/releases/v0.1.19.md).
 
 # Feature Status

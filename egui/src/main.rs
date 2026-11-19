@@ -1105,7 +1105,35 @@ struct App {
     cred_editor: Option<CredEditorState>,
     cred_delete: Option<String>,
     folder_pick: Option<FolderPick>,
+    connect_palette: Option<ConnectPalette>,
     toast: Option<(String, Instant)>,
+}
+
+fn normalize_search(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+struct ConnectPalette {
+    filter: String,
+    selected: usize,
+    focus: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ConnectAction {
+    Local,
+    Device(usize),
+    Quick,
+}
+
+struct ConnectItem {
+    label: String,
+    detail: String,
+    action: ConnectAction,
 }
 
 struct FolderEditorState {
@@ -1278,6 +1306,7 @@ impl App {
             cred_editor: None,
             cred_delete: None,
             folder_pick: None,
+            connect_palette: None,
             toast: None,
         };
         app.commands = app.db.list_commands().unwrap_or_default();
@@ -1810,6 +1839,149 @@ impl App {
             });
         if !open {
             self.show_credentials = false;
+        }
+    }
+
+    fn connect_palette(&mut self, ctx: &egui::Context) {
+        let Some(mut palette) = self.connect_palette.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut activate = None;
+        let (down, up, enter, escape) = ctx.input_mut(|input| {
+            (
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+            )
+        });
+        let mut moved = false;
+        let frame = egui::Frame::new()
+            .fill(ctx.global_style().visuals.window_fill)
+            .stroke(egui::Stroke::new(
+                1.0,
+                ctx.global_style().visuals.window_stroke.color,
+            ))
+            .corner_radius(12)
+            .inner_margin(16)
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 12],
+                blur: 32,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(100),
+            });
+        let modal = egui::Modal::new(egui::Id::new("opsterm-connect-palette"))
+            .frame(frame)
+            .backdrop_color(egui::Color32::from_black_alpha(140))
+            .show(ctx, |ui| {
+                ui.set_width(520.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Connect").size(18.0).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("↑↓ select · ↵ connect · esc close")
+                                .small()
+                                .color(muted()),
+                        );
+                    });
+                });
+                ui.add_space(6.0);
+                let before = palette.filter.clone();
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut palette.filter)
+                        .hint_text("Search devices or type user@host…")
+                        .desired_width(f32::INFINITY),
+                );
+                if palette.focus {
+                    search.request_focus();
+                    palette.focus = false;
+                }
+                if palette.filter != before {
+                    palette.selected = 0;
+                }
+                ui.add_space(6.0);
+                let items = self.palette_items(&palette.filter);
+                if items.is_empty() {
+                    palette.selected = 0;
+                } else {
+                    palette.selected = palette.selected.min(items.len() - 1);
+                    if down {
+                        palette.selected = (palette.selected + 1) % items.len();
+                        moved = true;
+                    }
+                    if up {
+                        palette.selected = (palette.selected + items.len() - 1) % items.len();
+                        moved = true;
+                    }
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("connect-palette")
+                    .max_height(340.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if items.is_empty() {
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new("No matching devices or address.")
+                                    .color(muted()),
+                            );
+                            return;
+                        }
+                        for (index, item) in items.iter().enumerate() {
+                            let selected = index == palette.selected;
+                            let response = ui.add_sized(
+                                [ui.available_width(), 32.0],
+                                egui::Button::selectable(
+                                    selected,
+                                    egui::RichText::new(format!(
+                                        "{}  ·  {}",
+                                        item.label, item.detail
+                                    ))
+                                    .size(13.0),
+                                )
+                                .corner_radius(4),
+                            );
+                            if selected && moved {
+                                response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if response.clicked() {
+                                activate = Some(item.action.clone());
+                            }
+                        }
+                    });
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!("{} result(s)", items.len()))
+                        .small()
+                        .color(muted()),
+                );
+                if enter {
+                    if let Some(item) = items.get(palette.selected) {
+                        activate = Some(item.action.clone());
+                    }
+                }
+            });
+        if escape || modal.should_close() {
+            close = true;
+        }
+        if let Some(action) = activate {
+            close = true;
+            match action {
+                ConnectAction::Local => self.new_local(),
+                ConnectAction::Device(index) => {
+                    if let Some(device) = self.devices.get(index).cloned() {
+                        self.open_saved(&device);
+                    }
+                }
+                ConnectAction::Quick => {
+                    self.quick = palette.filter.trim().to_string();
+                    self.connect_quick();
+                }
+            }
+        }
+        if !close {
+            self.connect_palette = Some(palette);
         }
     }
 
@@ -2504,7 +2676,10 @@ impl App {
     }
 
     fn send_command(&mut self, with_enter: bool) {
-        if self.close_input_blocked || self.close_confirmation.active() {
+        if self.close_input_blocked
+            || self.close_confirmation.active()
+            || self.connect_palette.is_some()
+        {
             return;
         }
         let mut bytes = command_input::normalize(&self.command).into_bytes();
@@ -2647,6 +2822,7 @@ impl App {
         );
         let resp = ui.allocate_rect(grid, egui::Sense::click_and_drag());
         if !self.close_input_blocked
+            && self.connect_palette.is_none()
             && active == self.active
             && self.terminal_focus == Some(self.sessions[active].id)
         {
@@ -2937,6 +3113,7 @@ impl App {
             && active == self.active
             && !self.close_input_blocked
             && !self.close_confirmation.active()
+            && self.connect_palette.is_none()
         {
             let mut out: Vec<u8> = Vec::new();
             let mut copy = false;
@@ -3227,6 +3404,90 @@ impl App {
             }
             Err(error) => self.flash = format!("Could not delete folder: {error}"),
         }
+    }
+
+    fn open_connect_palette(&mut self) {
+        self.connect_palette = Some(ConnectPalette {
+            filter: String::new(),
+            selected: 0,
+            focus: true,
+        });
+    }
+
+    fn palette_items(&self, filter: &str) -> Vec<ConnectItem> {
+        let needle = filter.trim().to_lowercase();
+        let tokens: Vec<String> = needle
+            .split_whitespace()
+            .map(normalize_search)
+            .filter(|token| !token.is_empty())
+            .collect();
+        let joined = tokens.concat();
+        let mut items = Vec::new();
+        let mut matches = Vec::new();
+        if tokens.is_empty() {
+            items.push(ConnectItem {
+                label: "Local terminal".into(),
+                detail: "this computer".into(),
+                action: ConnectAction::Local,
+            });
+        }
+        for (index, device) in self.devices.iter().enumerate() {
+            let haystack = normalize_search(&format!(
+                "{} {} {} {}",
+                device.name,
+                device.host,
+                device.username.as_deref().unwrap_or_default(),
+                device.tags.join(" ")
+            ));
+            if !tokens.iter().all(|token| haystack.contains(token)) {
+                continue;
+            }
+            let name = normalize_search(&device.name);
+            let rank = if joined.is_empty() {
+                3
+            } else if name == joined {
+                0
+            } else if name.starts_with(&joined) {
+                1
+            } else if name.contains(&joined) {
+                2
+            } else {
+                3
+            };
+            let user = device
+                .username
+                .as_deref()
+                .map(|user| format!("{user}@"))
+                .unwrap_or_default();
+            let port = if device.port != 22 {
+                format!(":{}", device.port)
+            } else {
+                String::new()
+            };
+            matches.push((
+                rank,
+                ConnectItem {
+                    label: device.name.clone(),
+                    detail: format!("{} · {user}{}{port}", device.protocol, device.host),
+                    action: ConnectAction::Device(index),
+                },
+            ));
+        }
+        matches.sort_by_key(|(rank, _)| *rank);
+        items.extend(matches.into_iter().map(|(_, item)| item));
+        if !tokens.is_empty() && quick_connect::parse(filter).is_ok() {
+            items.push(ConnectItem {
+                label: format!("Connect to “{}”", filter.trim()),
+                detail: "SSH quick connect".into(),
+                action: ConnectAction::Quick,
+            });
+        }
+        items
+    }
+
+    fn sidebar_shows_tree(&self) -> bool {
+        self.dev_filter.trim().is_empty()
+            && (!self.device_indices.is_empty() || !self.folders.is_empty())
     }
 
     fn refilter_devices(&mut self) {
@@ -4961,10 +5222,16 @@ impl App {
             p.task.bind(&ctx);
         }
 
-        if !self.close_input_blocked && !self.close_confirmation.active() {
+        if !self.close_input_blocked
+            && !self.close_confirmation.active()
+            && self.connect_palette.is_none()
+        {
             let primary_shift = egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT);
             if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::T)) {
                 self.new_local();
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::T)) {
+                self.open_connect_palette();
             }
             if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::P)) {
                 self.composer_open = !self.composer_open;
@@ -5152,6 +5419,10 @@ impl App {
                         });
                     });
                     ui.menu_button("Session", |ui| {
+                        if ui.button("Connect…").clicked() {
+                            self.open_connect_palette();
+                            ui.close();
+                        }
                         if ui.button("New local shell").clicked() {
                             self.new_local();
                             ui.close();
@@ -5652,6 +5923,16 @@ impl App {
                             self.refresh_folders();
                             self.refresh_devices();
                         }
+                        if ui
+                            .small_button("T")
+                            .on_hover_text(format!(
+                                "Search and connect ({}+T)",
+                                primary_key_label()
+                            ))
+                            .clicked()
+                        {
+                            self.open_connect_palette();
+                        }
                     });
                 });
                 ui.add_space(4.0);
@@ -5663,7 +5944,16 @@ impl App {
                     .get(self.active)
                     .and_then(|s| s.saved_id.as_deref());
                 let folder_choices = self.folder_choices();
-                let action = if self.device_indices.is_empty() {
+                let action = if self.sidebar_shows_tree() {
+                    device_list::show_tree(
+                        ui,
+                        &self.devices,
+                        &self.device_indices,
+                        &self.folders,
+                        active_saved,
+                        &folder_choices,
+                    )
+                } else if self.device_indices.is_empty() {
                     ui.add_space(16.0);
                     ui.label(
                         egui::RichText::new(if self.devices.is_empty() {
@@ -5683,15 +5973,6 @@ impl App {
                         .color(muted()),
                     );
                     None
-                } else if self.dev_filter.trim().is_empty() {
-                    device_list::show_tree(
-                        ui,
-                        &self.devices,
-                        &self.device_indices,
-                        &self.folders,
-                        active_saved,
-                        &folder_choices,
-                    )
                 } else {
                     device_list::show(
                         ui,
@@ -6745,6 +7026,8 @@ impl App {
                         ("Ctrl + -", "Zoom out"),
                         ("Ctrl + 0", "Reset zoom"),
                         ("Ctrl + ,", "Open settings"),
+                        ("Ctrl + T", "Search and connect"),
+                        ("Ctrl + Shift + T", "New local shell"),
                         ("Ctrl + Shift + B", "Show/hide the devices sidebar"),
                         ("Ctrl + C", "Copy selection (or ETX if none)"),
                         ("Ctrl + A", "Select all"),
@@ -7039,6 +7322,7 @@ impl App {
         self.vault_prompt_dialog(ctx);
         self.export_backup_window(ctx);
         self.folder_picker_window(ctx);
+        self.connect_palette(ctx);
         self.draw_toast(ctx);
         if ctx.input(|i| i.is_scrolling()) {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -8646,6 +8930,81 @@ mod tests {
         assert_eq!(app.devices[0].folder_id.as_deref(), Some(role.id.as_str()));
         app.set_device_folder(0, None);
         assert_eq!(app.devices[0].folder_id, None);
+    }
+
+    #[test]
+    fn folders_show_in_the_sidebar_without_any_devices() {
+        let mut app = test_app();
+        app.refilter_devices();
+        assert!(!app.sidebar_shows_tree());
+        app.db
+            .upsert_folder(&FolderInput {
+                id: None,
+                parent_id: None,
+                name: "SWITCH".into(),
+                sort_order: None,
+            })
+            .unwrap();
+        app.refresh_folders();
+        app.refilter_devices();
+        assert!(app.sidebar_shows_tree());
+        app.dev_filter = "nothing".into();
+        app.refilter_devices();
+        assert!(!app.sidebar_shows_tree());
+    }
+
+    #[test]
+    fn connect_palette_lists_local_and_filters_saved_devices() {
+        let mut app = test_app();
+        saved_ssh(&app.db, "Router", None);
+        app.refresh_devices();
+        let items = app.palette_items("");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].action, ConnectAction::Local);
+        assert_eq!(items[1].label, "Router");
+        let filtered = app.palette_items("rout");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].action, ConnectAction::Device(0));
+        assert_eq!(filtered[1].action, ConnectAction::Quick);
+        let quick = app.palette_items("root@example.com");
+        assert!(quick.iter().any(|item| item.action == ConnectAction::Quick));
+        assert!(app.palette_items("no such device").is_empty());
+
+        saved_ssh(&app.db, "PE-KTT-01", None);
+        app.refresh_devices();
+        for filter in ["pe ktt", "pe-ktt", "PE KTT", "pektt"] {
+            let matched = app.palette_items(filter);
+            assert_eq!(matched[0].label, "PE-KTT-01", "filter {filter:?}");
+            assert!(
+                matched
+                    .iter()
+                    .all(|item| item.label == "PE-KTT-01" || item.action == ConnectAction::Quick),
+                "filter {filter:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_t_opens_the_connect_palette() {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 500.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(
+            input(vec![egui::Event::Key {
+                key: egui::Key::T,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]),
+            |ui| app.show(ui),
+        );
+        assert!(app.connect_palette.is_some());
+        assert!(app.sessions.is_empty());
     }
 
     #[test]

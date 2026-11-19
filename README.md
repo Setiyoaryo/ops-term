@@ -21,7 +21,7 @@ Unsigned portable builds are produced for **macOS aarch64/x86_64** (zip with
 uses Credential Manager, and both reuse the signed update manifest. Gatekeeper
 and SmartScreen may warn because the previews are not notarized or
 code-signed yet. Windows has no serial-console support. See
-[`docs/releases/v0.1.19.md`](docs/releases/v0.1.19.md).
+[`docs/releases/v0.1.20.md`](docs/releases/v0.1.20.md).
 
 ## Portable Linux packages
 
@@ -186,9 +186,11 @@ Passwords are never saved in SQLite. Device/tab selection also focuses the
 terminal keyboard automatically. See [the persistence correction](docs/credential-persistence-2026-10-23.md).
 
 The command composer starts collapsed: use **Command** in the status bar or
-`Ctrl+Shift+P`. `Ctrl+Shift+T` opens a local terminal and `Ctrl+Shift+W` closes
-the current tab. The device library refreshes after edits/imports; **Refresh**
-also reloads changes made by another client.
+`Ctrl+Shift+P`. `Ctrl+T` opens search-first connect: type a device name,
+host, or `user@host` and press Enter. Search ignores spaces and punctuation,
+so `pe ktt` matches `PE-KTT-01`. `Ctrl+Shift+T` opens a local terminal and
+`Ctrl+Shift+W` closes the current tab. The device library refreshes after
+edits/imports; **Refresh** also reloads changes made by another client.
 
 Idle rendering sleeps between events, with a one-second status/lifecycle clock.
 Device rows are virtualized, terminal text is drawn in color runs, scrollback
