@@ -20,6 +20,7 @@ pub enum Action {
     Activate(usize),
     OpenNew(usize),
     Edit(usize),
+    Delete(usize),
     PickFolder(usize),
     NewSubfolder(String),
     RenameFolder(String),
@@ -107,6 +108,10 @@ pub fn row(
         }
         if ui.button("Edit device").clicked() {
             action = Some(Action::Edit(index));
+            ui.close();
+        }
+        if ui.button("Delete device…").clicked() {
+            action = Some(Action::Delete(index));
             ui.close();
         }
         if !folder_choices.is_empty() && ui.button("Move to folder…").clicked() {

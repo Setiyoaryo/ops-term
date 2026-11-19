@@ -1084,6 +1084,7 @@ struct App {
     folders: Vec<Folder>,
     folder_editor: Option<FolderEditorState>,
     folder_delete: Option<Folder>,
+    device_delete: Option<SavedSession>,
     updater: update::Updater,
     ui_settings: UiSettings,
     scroll_speed: f32,
@@ -1285,6 +1286,7 @@ impl App {
             folders: Vec::new(),
             folder_editor: None,
             folder_delete: None,
+            device_delete: None,
             updater: update::Updater::new(),
             ui_settings: UiSettings::default(),
             scroll_speed: DEFAULT_SCROLL_SPEED,
@@ -3403,6 +3405,24 @@ impl App {
                 self.refresh_devices();
             }
             Err(error) => self.flash = format!("Could not delete folder: {error}"),
+        }
+    }
+
+    fn delete_confirmed_device(&mut self) {
+        let Some(device) = self.device_delete.take() else {
+            return;
+        };
+        match self.db.delete_session(&device.id) {
+            Ok(()) => {
+                self.refresh_devices();
+                for session in &mut self.sessions {
+                    if session.saved_id.as_deref() == Some(device.id.as_str()) {
+                        session.saved_id = None;
+                    }
+                }
+                self.toast = Some((format!("Device “{}” deleted", device.name), Instant::now()));
+            }
+            Err(error) => self.flash = format!("Could not delete device: {error}"),
         }
     }
 
@@ -5995,6 +6015,9 @@ impl App {
                         device_list::Action::Edit(i) => {
                             self.editor = Some(EditorState::from_saved(&self.devices[i]))
                         }
+                        device_list::Action::Delete(i) => {
+                            self.device_delete = Some(self.devices[i].clone());
+                        }
                         device_list::Action::PickFolder(i) => {
                             self.folder_pick = Some(FolderPick {
                                 index: i,
@@ -6295,6 +6318,7 @@ impl App {
         if let Some(mut ed) = self.editor.take() {
             let mut close = false;
             let mut save = false;
+            let mut delete = false;
             let title = if ed.id.is_some() {
                 "Edit Device"
             } else {
@@ -6472,9 +6496,25 @@ impl App {
                         if ui.button("Cancel").clicked() {
                             close = true;
                         }
+                        if ed.id.is_some()
+                            && ui
+                                .button(
+                                    egui::RichText::new("Delete…")
+                                        .color(egui::Color32::from_rgb(224, 108, 117)),
+                                )
+                                .clicked()
+                        {
+                            delete = true;
+                        }
                     });
                 });
-            if save {
+            if delete {
+                if let Some(id) = ed.id.as_deref() {
+                    self.device_delete =
+                        self.devices.iter().find(|device| device.id == id).cloned();
+                }
+                close = true;
+            } else if save {
                 if self.save_editor(&ed) {
                     close = true;
                 } else {
@@ -7313,6 +7353,47 @@ impl App {
                 self.delete_confirmed_folder();
             } else if cancel_delete || !open {
                 self.folder_delete = None;
+            }
+        }
+
+        if let Some(device) = self.device_delete.clone() {
+            let mut open = true;
+            let mut delete = false;
+            let mut cancel_delete = false;
+            egui::Window::new("Delete device")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(360.0)
+                .show(ctx, |ui| {
+                    ui.label(format!("Delete “{}”?", device.name));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}:{}. Open terminals stay open, but the saved device is removed.",
+                            device.host, device.port
+                        ))
+                        .small()
+                        .color(muted()),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                egui::RichText::new("Delete")
+                                    .color(egui::Color32::from_rgb(224, 108, 117)),
+                            )
+                            .clicked()
+                        {
+                            delete = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel_delete = true;
+                        }
+                    });
+                });
+            if delete {
+                self.delete_confirmed_device();
+            } else if cancel_delete || !open {
+                self.device_delete = None;
             }
         }
 
@@ -8951,6 +9032,21 @@ mod tests {
         app.dev_filter = "nothing".into();
         app.refilter_devices();
         assert!(!app.sidebar_shows_tree());
+    }
+
+    #[test]
+    fn deleting_a_device_removes_it_and_detaches_open_tabs() {
+        let mut app = test_app();
+        let saved = saved_ssh(&app.db, "Router", None);
+        app.refresh_devices();
+        let (mut session, _) = test_session(std::io::empty());
+        session.saved_id = Some(saved.id.clone());
+        app.sessions.push(session);
+        app.device_delete = Some(saved);
+        app.delete_confirmed_device();
+        assert!(app.devices.is_empty());
+        assert!(app.sessions[0].saved_id.is_none());
+        assert!(app.toast.is_some());
     }
 
     #[test]
