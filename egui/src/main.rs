@@ -25,8 +25,9 @@ use serde::{Deserialize, Serialize};
 
 use opsterm_core::backup;
 use opsterm_core::domain::{
-    Command, Folder, FolderInput, Runbook, RunbookInput, SavedSession, SavedSessionInput,
-    SerialSpec, SshSpec, TelnetSpec, TerminalDimensions, Workspace, WorkspaceInput,
+    Command, CommandInput, Folder, FolderInput, Runbook, RunbookInput, SavedSession,
+    SavedSessionInput, SerialSpec, SshSpec, TelnetSpec, TerminalDimensions, Workspace,
+    WorkspaceInput,
 };
 use opsterm_core::providers::ConnectionProvider;
 use opsterm_core::sftp::SftpEntry;
@@ -1051,6 +1052,15 @@ struct App {
     pump_cursor: usize,
     show_runbooks: bool,
     runbooks: Vec<Runbook>,
+    show_command_library: bool,
+    cl_id: Option<String>,
+    cl_name: String,
+    cl_content: String,
+    cl_vendor: String,
+    cl_tags: String,
+    cl_filter: String,
+    cl_msg: String,
+    command_bar_filter: String,
     rb_id: Option<String>,
     rb_name: String,
     rb_script: String,
@@ -1108,6 +1118,14 @@ struct App {
     folder_pick: Option<FolderPick>,
     connect_palette: Option<ConnectPalette>,
     toast: Option<(String, Instant)>,
+}
+
+fn truncate_label(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        value.to_string()
+    } else {
+        format!("{}…", value.chars().take(max).collect::<String>())
+    }
 }
 
 fn normalize_search(value: &str) -> String {
@@ -1253,6 +1271,15 @@ impl App {
             pump_cursor: 0,
             show_runbooks: false,
             runbooks: Vec::new(),
+            show_command_library: false,
+            cl_id: None,
+            cl_name: String::new(),
+            cl_content: String::new(),
+            cl_vendor: String::new(),
+            cl_tags: String::new(),
+            cl_filter: String::new(),
+            cl_msg: String::new(),
+            command_bar_filter: String::new(),
             rb_id: None,
             rb_name: String::new(),
             rb_script: String::new(),
@@ -3426,6 +3453,297 @@ impl App {
         }
     }
 
+    fn open_command_library(&mut self, command: Option<Command>) {
+        self.show_command_library = true;
+        if let Some(command) = command {
+            self.load_command_editor(&command);
+        } else {
+            self.clear_command_editor();
+        }
+    }
+
+    fn clear_command_editor(&mut self) {
+        self.cl_id = None;
+        self.cl_name.clear();
+        self.cl_content.clear();
+        self.cl_vendor.clear();
+        self.cl_tags.clear();
+        self.cl_msg.clear();
+    }
+
+    fn load_command_editor(&mut self, command: &Command) {
+        self.cl_id = Some(command.id.clone());
+        self.cl_name = command.name.clone();
+        self.cl_content = command.content.clone();
+        self.cl_vendor = command.vendor_profile.clone().unwrap_or_default();
+        self.cl_tags = command.tags.join(", ");
+        self.cl_msg.clear();
+    }
+
+    fn save_command_editor(&mut self) -> bool {
+        let name = self.cl_name.trim().to_string();
+        let content = self.cl_content.trim().to_string();
+        if name.is_empty() {
+            self.cl_msg = "Name is required.".into();
+            return false;
+        }
+        if content.is_empty() {
+            self.cl_msg = "Command is required.".into();
+            return false;
+        }
+        let existing = self
+            .cl_id
+            .as_deref()
+            .and_then(|id| self.commands.iter().find(|command| command.id == id))
+            .cloned();
+        let tags: Vec<String> = self
+            .cl_tags
+            .split(',')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .collect();
+        let vendor = self.cl_vendor.trim();
+        let input = CommandInput {
+            id: self.cl_id.clone(),
+            group_id: existing
+                .as_ref()
+                .and_then(|command| command.group_id.clone()),
+            name,
+            content,
+            vendor_profile: (!vendor.is_empty()).then(|| vendor.to_string()),
+            execute_mode: existing
+                .as_ref()
+                .map(|command| command.execute_mode.clone())
+                .unwrap_or_else(|| "insert".into()),
+            risk_level: existing
+                .as_ref()
+                .map(|command| command.risk_level.clone())
+                .unwrap_or_else(|| "low".into()),
+            variables: existing
+                .as_ref()
+                .map(|command| command.variables.clone())
+                .unwrap_or_else(|| serde_json::json!({})),
+            tags,
+        };
+        match self.db.upsert_command(&input) {
+            Ok(command) => {
+                self.cl_id = Some(command.id.clone());
+                self.cl_name = command.name.clone();
+                self.cl_content = command.content.clone();
+                self.cl_vendor = command.vendor_profile.clone().unwrap_or_default();
+                self.cl_tags = command.tags.join(", ");
+                self.cl_msg = format!("Saved {}.", command.name);
+                self.commands = self.db.list_commands().unwrap_or_default();
+                true
+            }
+            Err(error) => {
+                self.cl_msg = format!("Could not save: {error}");
+                false
+            }
+        }
+    }
+
+    fn delete_command_editor(&mut self) -> bool {
+        let Some(id) = self.cl_id.clone() else {
+            return false;
+        };
+        match self.db.delete_command(&id) {
+            Ok(()) => {
+                self.commands = self.db.list_commands().unwrap_or_default();
+                self.clear_command_editor();
+                self.cl_msg = "Deleted.".into();
+                true
+            }
+            Err(error) => {
+                self.cl_msg = format!("Could not delete: {error}");
+                false
+            }
+        }
+    }
+
+    fn command_library_window(&mut self, ctx: &egui::Context) {
+        if !self.show_command_library {
+            return;
+        }
+        let mut open = true;
+        let mut load = None;
+        let mut new = false;
+        let mut save = false;
+        let mut delete = false;
+        let mut send = false;
+        let needle = self.cl_filter.trim().to_lowercase();
+        let list: Vec<Command> = self
+            .commands
+            .iter()
+            .filter(|command| {
+                needle.is_empty()
+                    || command.name.to_lowercase().contains(&needle)
+                    || command.content.to_lowercase().contains(&needle)
+                    || command
+                        .vendor_profile
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(&needle)
+                    || command
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&needle))
+            })
+            .cloned()
+            .collect();
+        egui::Window::new("Command library")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(620.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Saved commands")
+                            .size(13.0)
+                            .strong()
+                            .color(text_c()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.cl_filter)
+                            .hint_text("Search name, command, vendor, or tag…")
+                            .desired_width(260.0),
+                    );
+                    if ui.button("New").clicked() {
+                        new = true;
+                    }
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("command-library-list")
+                    .max_height(150.0)
+                    .show(ui, |ui| {
+                        for command in &list {
+                            let selected = self.cl_id.as_deref() == Some(command.id.as_str());
+                            let vendor = command
+                                .vendor_profile
+                                .as_deref()
+                                .map(|vendor| format!("  ·  {vendor}"))
+                                .unwrap_or_default();
+                            let label = format!(
+                                "{}  —  {}{}",
+                                command.name,
+                                truncate_label(&command.content, 48),
+                                vendor
+                            );
+                            if ui.selectable_label(selected, label).clicked() {
+                                load = Some(command.clone());
+                            }
+                        }
+                        if list.is_empty() {
+                            ui.label(
+                                egui::RichText::new("No matching commands")
+                                    .small()
+                                    .color(muted()),
+                            );
+                        }
+                    });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(&mut self.cl_name).desired_width(260.0));
+                    ui.label("Vendor");
+                    egui::ComboBox::from_id_salt("cl-vendor")
+                        .selected_text(if self.cl_vendor.is_empty() {
+                            "No vendor"
+                        } else {
+                            &self.cl_vendor
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.cl_vendor, String::new(), "No vendor");
+                            for vendor in VENDORS {
+                                ui.selectable_value(
+                                    &mut self.cl_vendor,
+                                    vendor.label.to_string(),
+                                    vendor.label,
+                                );
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Command");
+                    ui.label(
+                        egui::RichText::new("sent to the active session or broadcast targets")
+                            .small()
+                            .color(muted()),
+                    );
+                });
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.cl_content)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .font(FontId::monospace(12.0)),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Tags");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.cl_tags)
+                            .hint_text("comma-separated")
+                            .desired_width(260.0),
+                    );
+                });
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.cl_name.trim().is_empty() && !self.cl_content.trim().is_empty(),
+                            egui::Button::new("Save"),
+                        )
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.cl_content.trim().is_empty(),
+                            egui::Button::new("Send"),
+                        )
+                        .on_hover_text("Send this command to the active session")
+                        .clicked()
+                    {
+                        send = true;
+                    }
+                    if ui
+                        .add_enabled(self.cl_id.is_some(), egui::Button::new("Delete"))
+                        .clicked()
+                    {
+                        delete = true;
+                    }
+                    if ui.button("Clear").clicked() {
+                        new = true;
+                    }
+                });
+                if !self.cl_msg.is_empty() {
+                    ui.label(egui::RichText::new(&self.cl_msg).small().color(muted()));
+                }
+            });
+        if new {
+            self.clear_command_editor();
+        }
+        if let Some(command) = load {
+            self.load_command_editor(&command);
+        }
+        if save {
+            self.save_command_editor();
+        }
+        if send {
+            let content = self.cl_content.clone();
+            self.send_raw(&content);
+            self.cl_msg = self.flash.clone();
+        }
+        if delete {
+            self.delete_command_editor();
+        }
+        if !open {
+            self.show_command_library = false;
+        }
+    }
+
     fn open_connect_palette(&mut self) {
         self.connect_palette = Some(ConnectPalette {
             filter: String::new(),
@@ -5499,6 +5817,10 @@ impl App {
                             self.runbooks = self.db.list_runbooks().unwrap_or_default();
                             ui.close();
                         }
+                        if ui.button("Command library").clicked() {
+                            self.open_command_library(None);
+                            ui.close();
+                        }
                         if ui.button("Subnet calculator").clicked() {
                             self.show_subnet = true;
                             ui.close();
@@ -5670,30 +5992,97 @@ impl App {
                 });
             });
 
-        // Command / Button bar (from the command library).
+        // Command library bar: filterable chips instead of one long clipped row.
         if self.composer_open && !self.commands.is_empty() {
+            let needle = self.command_bar_filter.trim().to_lowercase();
+            let visible: Vec<Command> = self
+                .commands
+                .iter()
+                .filter(|command| {
+                    needle.is_empty()
+                        || command.name.to_lowercase().contains(&needle)
+                        || command.content.to_lowercase().contains(&needle)
+                        || command
+                            .vendor_profile
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase()
+                            .contains(&needle)
+                        || command
+                            .tags
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(&needle))
+                })
+                .cloned()
+                .collect();
+            let mut send = None;
+            let mut manage = false;
             egui::Panel::top("buttons")
-                .exact_size(34.0)
+                .exact_size(70.0)
                 .frame(bar_frame())
                 .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Commands")
+                                .size(12.0)
+                                .strong()
+                                .color(muted()),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.command_bar_filter)
+                                .hint_text("Filter commands…")
+                                .desired_width(170.0),
+                        );
+                        if ui
+                            .small_button("Manage…")
+                            .on_hover_text("Add, edit, or delete commands")
+                            .clicked()
+                        {
+                            manage = true;
+                        }
+                        if visible.is_empty() {
+                            ui.label(
+                                egui::RichText::new("No matching commands")
+                                    .small()
+                                    .color(muted()),
+                            );
+                        }
+                    });
                     egui::ScrollArea::horizontal()
+                        .id_salt("command-buttons")
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.horizontal_centered(|ui| {
-                                let mut send = None;
-                                for c in &self.commands {
-                                    let label = c.name.clone();
-                                    let content = c.content.clone();
-                                    if ui.small_button(label).clicked() {
-                                        send = Some(content);
+                                for command in &visible {
+                                    let response =
+                                        ui.add(
+                                            egui::Button::new(
+                                                egui::RichText::new(truncate_label(
+                                                    &command.name,
+                                                    34,
+                                                ))
+                                                .size(12.0),
+                                            )
+                                            .corner_radius(9)
+                                            .min_size(Vec2::new(0.0, 24.0)),
+                                        )
+                                        .on_hover_text(
+                                            format!("{}\n{}", command.name, command.content),
+                                        );
+                                    if response.clicked() {
+                                        send = Some(command.content.clone());
                                     }
-                                }
-                                if let Some(content) = send {
-                                    self.send_raw(&content);
                                 }
                             });
                         });
                 });
+            if manage {
+                self.open_command_library(None);
+            }
+            if let Some(content) = send {
+                self.send_raw(&content);
+            }
         }
 
         egui::Panel::bottom("status")
@@ -7397,6 +7786,7 @@ impl App {
             }
         }
 
+        self.command_library_window(ctx);
         self.settings_window(ctx);
         self.credentials_window(ctx);
         self.credential_delete_dialog(ctx);
@@ -9032,6 +9422,37 @@ mod tests {
         app.dev_filter = "nothing".into();
         app.refilter_devices();
         assert!(!app.sidebar_shows_tree());
+    }
+
+    #[test]
+    fn custom_commands_can_be_saved_edited_and_deleted() {
+        let mut app = test_app();
+        app.cl_name = "Show BGP neighbors".into();
+        app.cl_content = "show bgp neighbor".into();
+        app.cl_tags = "bgp, routing".into();
+        assert!(app.save_command_editor());
+        assert_eq!(app.commands.len(), 1);
+        assert_eq!(app.commands[0].content, "show bgp neighbor");
+        assert_eq!(app.commands[0].tags, vec!["bgp", "routing"]);
+
+        let id = app.commands[0].id.clone();
+        app.cl_id = Some(id);
+        app.cl_content = "show bgp neighbors".into();
+        assert!(app.save_command_editor());
+        assert_eq!(app.commands.len(), 1);
+        assert_eq!(app.commands[0].content, "show bgp neighbors");
+
+        assert!(app.delete_command_editor());
+        assert!(app.commands.is_empty());
+    }
+
+    #[test]
+    fn command_labels_are_truncated_without_splitting_characters() {
+        assert_eq!(truncate_label("show version", 34), "show version");
+        let long = "Cisco show running-config interface description";
+        let label = truncate_label(long, 24);
+        assert_eq!(label.chars().count(), 25);
+        assert!(label.ends_with('…'));
     }
 
     #[test]

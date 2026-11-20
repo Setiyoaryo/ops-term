@@ -186,8 +186,10 @@ Passwords are never saved in SQLite. Device/tab selection also focuses the
 terminal keyboard automatically. See [the persistence correction](docs/credential-persistence-2026-10-23.md).
 
 The command composer starts collapsed: use **Command** in the status bar or
-`Ctrl+Shift+P`. `Ctrl+T` opens search-first connect: type a device name,
-host, or `user@host` and press Enter. Search ignores spaces and punctuation,
+`Ctrl+Shift+P`. The command buttons above the composer come from
+**Tools → Command library**, where custom commands can be added, edited, and
+deleted; the bar's filter narrows the buttons. `Ctrl+T` opens search-first
+connect: type a device name, host, or `user@host` and press Enter. Search ignores spaces and punctuation,
 so `pe ktt` matches `PE-KTT-01`. `Ctrl+Shift+T` opens a local terminal and
 `Ctrl+Shift+W` closes the current tab. The device library refreshes after
 edits/imports; **Refresh** also reloads changes made by another client.
