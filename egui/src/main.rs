@@ -913,6 +913,10 @@ struct UiSettings {
     terminal_scroll_speed: f32,
     vault_ttl_secs: u64,
     sidebar_visible: bool,
+    #[serde(default)]
+    highlight_rules: Option<Vec<(String, [u8; 3], bool)>>,
+    #[serde(default)]
+    highlight: Option<bool>,
 }
 
 impl Default for UiSettings {
@@ -927,6 +931,8 @@ impl Default for UiSettings {
             terminal_scroll_speed: DEFAULT_TERMINAL_SCROLL_SPEED,
             vault_ttl_secs: DEFAULT_VAULT_TTL_SECS,
             sidebar_visible: true,
+            highlight_rules: None,
+            highlight: None,
         }
     }
 }
@@ -1022,6 +1028,7 @@ struct App {
     export_error: Option<String>,
     search: String,
     search_open: bool,
+    search_focus: bool,
     tunnels: TunnelManager,
     show_tunnels: bool,
     t_kind: String,
@@ -1229,6 +1236,7 @@ impl App {
             export_error: None,
             search: String::new(),
             search_open: false,
+            search_focus: false,
             tunnels: TunnelManager::new(),
             show_tunnels: false,
             t_kind: "local".into(),
@@ -1360,6 +1368,12 @@ impl App {
         set_theme(theme_for(self.theme_idx));
         self.vault_ttl_secs = settings.vault_ttl_secs.max(60);
         self.show_sidebar = settings.sidebar_visible;
+        if let Some(rules) = &settings.highlight_rules {
+            self.hl_rules.clone_from(rules);
+        }
+        if let Some(highlight) = settings.highlight {
+            self.highlight = highlight;
+        }
         self.ui_settings = settings;
         self.ui_settings
             .terminal_appearance
@@ -1387,6 +1401,8 @@ impl App {
         self.ui_settings.terminal_scroll_speed = self.terminal_scroll_speed;
         self.ui_settings.vault_ttl_secs = self.vault_ttl_secs;
         self.ui_settings.sidebar_visible = self.show_sidebar;
+        self.ui_settings.highlight_rules = Some(self.hl_rules.clone());
+        self.ui_settings.highlight = Some(self.highlight);
         let _ = self.db.save_named_setting("ui.egui", &self.ui_settings);
     }
 
@@ -5568,8 +5584,18 @@ impl App {
             if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::T)) {
                 self.new_local();
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::T)) {
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::T)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::T)
+            }) {
                 self.open_connect_palette();
+            }
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::F)
+            }) {
+                self.search_open = !self.search_open;
+                self.search_focus = self.search_open;
             }
             if ctx.input_mut(|i| i.consume_key(primary_shift, egui::Key::P)) {
                 self.composer_open = !self.composer_open;
@@ -5716,14 +5742,28 @@ impl App {
                             format!("Command composer ({}+Shift+P)", primary_key_label()),
                         );
                         ui.checkbox(&mut self.show_scratch, "Scratchpad");
-                        ui.checkbox(&mut self.highlight, "Keyword highlight");
+                        if ui
+                            .checkbox(&mut self.highlight, "Keyword highlight")
+                            .changed()
+                        {
+                            self.save_ui_settings();
+                        }
                         if ui
                             .checkbox(&mut self.auto_reconnect, "Auto-reconnect")
                             .changed()
                         {
                             self.save_ui_settings();
                         }
-                        ui.checkbox(&mut self.search_open, "Find bar");
+                        if ui
+                            .checkbox(
+                                &mut self.search_open,
+                                format!("Find bar ({}+F)", primary_key_label()),
+                            )
+                            .changed()
+                            && self.search_open
+                        {
+                            self.search_focus = true;
+                        }
                         ui.separator();
                         if ui.button("Highlight rules…").clicked() {
                             self.show_hl = true;
@@ -6658,11 +6698,20 @@ impl App {
                     if self.search_open {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("FIND").small().color(muted()));
-                            ui.add(
+                            let response = ui.add(
                                 egui::TextEdit::singleline(&mut self.search)
                                     .hint_text("search output…")
                                     .desired_width(260.0),
                             );
+                            if self.search_focus {
+                                response.request_focus();
+                                self.search_focus = false;
+                            }
+                            if response.has_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Escape))
+                            {
+                                self.search_open = false;
+                            }
                             if ui.button("✕").clicked() {
                                 self.search.clear();
                                 self.search_open = false;
@@ -7455,6 +7504,7 @@ impl App {
                         ("Ctrl + -", "Zoom out"),
                         ("Ctrl + 0", "Reset zoom"),
                         ("Ctrl + ,", "Open settings"),
+                        ("Ctrl + F", "Find in the active terminal"),
                         ("Ctrl + T", "Search and connect"),
                         ("Ctrl + Shift + T", "New local shell"),
                         ("Ctrl + Shift + B", "Show/hide the devices sidebar"),
@@ -7574,6 +7624,7 @@ impl App {
         // Highlight rules editor.
         if self.show_hl {
             let mut open = true;
+            let rules_before = self.hl_rules.clone();
             let mut remove: Option<usize> = None;
             let mut add = false;
             egui::Window::new("Highlight rules")
@@ -7629,6 +7680,9 @@ impl App {
             }
             if !open {
                 self.show_hl = false;
+            }
+            if self.hl_rules != rules_before {
+                self.save_ui_settings();
             }
         }
 
@@ -9502,7 +9556,32 @@ mod tests {
     }
 
     #[test]
-    fn primary_t_opens_the_connect_palette() {
+    fn primary_t_opens_the_connect_palette_for_command_and_control() {
+        for modifiers in [egui::Modifiers::COMMAND, egui::Modifiers::CTRL] {
+            let mut app = test_app();
+            let ctx = egui::Context::default();
+            let input = |events| egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 500.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(
+                input(vec![egui::Event::Key {
+                    key: egui::Key::T,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }]),
+                |ui| app.show(ui),
+            );
+            assert!(app.connect_palette.is_some(), "modifiers {modifiers:?}");
+            assert!(app.sessions.is_empty());
+        }
+    }
+
+    #[test]
+    fn primary_f_toggles_the_find_bar() {
         let mut app = test_app();
         let ctx = egui::Context::default();
         let input = |events| egui::RawInput {
@@ -9510,18 +9589,35 @@ mod tests {
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(
+        let press_f = || {
             input(vec![egui::Event::Key {
-                key: egui::Key::T,
+                key: egui::Key::F,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
                 modifiers: egui::Modifiers::COMMAND,
-            }]),
-            |ui| app.show(ui),
-        );
-        assert!(app.connect_palette.is_some());
-        assert!(app.sessions.is_empty());
+            }])
+        };
+        let _ = ctx.run_ui(press_f(), |ui| app.show(ui));
+        assert!(app.search_open);
+        assert!(ctx.memory(|memory| memory.focused().is_some()));
+        let _ = ctx.run_ui(press_f(), |ui| app.show(ui));
+        assert!(!app.search_open);
+    }
+
+    #[test]
+    fn highlight_rules_survive_a_settings_reload() {
+        let mut app = test_app();
+        app.hl_rules
+            .push(("custom-keyword".into(), [1, 2, 3], true));
+        app.highlight = false;
+        app.save_ui_settings();
+        let expected = app.hl_rules.clone();
+        app.hl_rules.clear();
+        app.highlight = true;
+        app.load_ui_settings();
+        assert_eq!(app.hl_rules, expected);
+        assert!(!app.highlight);
     }
 
     #[test]
