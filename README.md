@@ -189,7 +189,9 @@ The command composer starts collapsed: use **Command** in the status bar or
 `Ctrl+Shift+P`. The command buttons above the composer come from
 **Tools → Command library**, where custom commands can be added, edited, and
 deleted; the bar's filter narrows the buttons. `Ctrl+T` opens search-first
-connect: type a device name, host, or `user@host` and press Enter. Search ignores spaces and punctuation,
+connect: type a device name, host, `user@host`, or a serial port such as
+`/dev/ttyUSB0 115200` and press Enter (`serial /dev/ttyUSB0 115200` and bare
+`/dev/ttyUSB0` also work; serial quick connect is Unix-only). Search ignores spaces and punctuation,
 so `pe ktt` matches `PE-KTT-01`. `Ctrl+Shift+T` opens a local terminal and
 `Ctrl+Shift+W` closes the current tab, and `Ctrl+F` toggles the terminal find
 bar. The device library refreshes after edits/imports; **Refresh** also reloads

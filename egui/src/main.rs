@@ -1154,6 +1154,7 @@ enum ConnectAction {
     Local,
     Device(usize),
     Quick,
+    QuickSerial(SerialSpec),
 }
 
 struct ConnectItem {
@@ -1935,7 +1936,7 @@ impl App {
                 let before = palette.filter.clone();
                 let search = ui.add(
                     egui::TextEdit::singleline(&mut palette.filter)
-                        .hint_text("Search devices or type user@host…")
+                        .hint_text("Search devices, user@host, or /dev/ttyUSB0 115200…")
                         .desired_width(f32::INFINITY),
                 );
                 if palette.focus {
@@ -2022,6 +2023,10 @@ impl App {
                 ConnectAction::Quick => {
                     self.quick = palette.filter.trim().to_string();
                     self.connect_quick();
+                }
+                ConnectAction::QuickSerial(spec) => {
+                    let title = format!("Serial {}", spec.device);
+                    self.spawn_serial(spec, title);
                 }
             }
         }
@@ -2701,6 +2706,20 @@ impl App {
                 }
             }
         }
+    }
+
+    fn spawn_serial(&mut self, spec: SerialSpec, title: String) {
+        self.queue_connection(
+            connections::Request {
+                title,
+                origin: Origin::Serial(spec),
+                saved: None,
+                secret: None,
+                target: None,
+                dims: TerminalDimensions { cols: 80, rows: 24 },
+            },
+            None,
+        );
     }
 
     fn connect_quick(&mut self) {
@@ -3829,12 +3848,25 @@ impl App {
         }
         matches.sort_by_key(|(rank, _)| *rank);
         items.extend(matches.into_iter().map(|(_, item)| item));
-        if !tokens.is_empty() && quick_connect::parse(filter).is_ok() {
-            items.push(ConnectItem {
-                label: format!("Connect to “{}”", filter.trim()),
-                detail: "SSH quick connect".into(),
-                action: ConnectAction::Quick,
-            });
+        if !tokens.is_empty() {
+            let serial = if cfg!(unix) {
+                quick_connect::parse_serial(filter).ok()
+            } else {
+                None
+            };
+            if let Some(spec) = serial {
+                items.push(ConnectItem {
+                    label: format!("Serial {}", spec.device),
+                    detail: format!("{} baud · serial quick connect", spec.baud),
+                    action: ConnectAction::QuickSerial(spec),
+                });
+            } else if quick_connect::parse(filter).is_ok() {
+                items.push(ConnectItem {
+                    label: format!("Connect to “{}”", filter.trim()),
+                    detail: "SSH quick connect".into(),
+                    action: ConnectAction::Quick,
+                });
+            }
         }
         items
     }
@@ -9539,6 +9571,18 @@ mod tests {
         assert_eq!(filtered[1].action, ConnectAction::Quick);
         let quick = app.palette_items("root@example.com");
         assert!(quick.iter().any(|item| item.action == ConnectAction::Quick));
+        let serial = app.palette_items("/dev/ttyUSB0 115200");
+        assert_eq!(serial.len(), 1);
+        assert!(matches!(
+            &serial[0].action,
+            ConnectAction::QuickSerial(spec)
+                if spec.device == "/dev/ttyUSB0" && spec.baud == 115200
+        ));
+        let serial = app.palette_items("serial COM3 9600");
+        assert!(matches!(
+            &serial[0].action,
+            ConnectAction::QuickSerial(spec) if spec.device == "COM3"
+        ));
         assert!(app.palette_items("no such device").is_empty());
 
         saved_ssh(&app.db, "PE-KTT-01", None);
