@@ -1,3 +1,5 @@
+20 November 2026 — v0.1.22: Command library untuk menambah/mengedit/menghapus command tersimpan, command bar dengan filter dan chip ringkas, find bar `Ctrl+F`, aturan highlight yang tersimpan, serta quick connect serial (`/dev/ttyUSB0 115200`) di palette `Ctrl+T`. 180 test egui lulus. [Catatan rilis](docs/releases/v0.1.22.md).
+
 19 November 2026 — v0.1.21: device bisa dihapus lewat menu klik-kanan atau dialog Edit dengan konfirmasi; tab yang sedang terbuka tetap berjalan tetapi tidak lagi terhubung ke device tersimpan. 175 test egui lulus. [Catatan rilis](docs/releases/v0.1.21.md).
 
 19 November 2026 — v0.1.20: palette koneksi `Ctrl+T` dengan pencarian nama/host/user/tag yang mengabaikan spasi dan tanda baca (`pe ktt` cocok dengan `PE-KTT-01`) serta quick connect `user@host`; folder baru langsung tampil tanpa device. 174 test egui lulus. [Catatan rilis](docs/releases/v0.1.20.md).

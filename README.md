@@ -21,7 +21,7 @@ Unsigned portable builds are produced for **macOS aarch64/x86_64** (zip with
 uses Credential Manager, and both reuse the signed update manifest. Gatekeeper
 and SmartScreen may warn because the previews are not notarized or
 code-signed yet. Windows has no serial-console support. See
-[`docs/releases/v0.1.21.md`](docs/releases/v0.1.21.md).
+[`docs/releases/v0.1.22.md`](docs/releases/v0.1.22.md).
 
 ## Portable Linux packages
 
