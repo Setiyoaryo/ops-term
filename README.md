@@ -194,7 +194,8 @@ connect: type a device name, host, `user@host`, or a serial port such as
 `/dev/ttyUSB0` also work; serial quick connect is Unix-only). Search ignores spaces and punctuation,
 so `pe ktt` matches `PE-KTT-01`. `Ctrl+Shift+T` opens a local terminal and
 `Ctrl+Shift+W` closes the current tab, and `Ctrl+F` toggles the terminal find
-bar. The device library refreshes after edits/imports; **Refresh** also reloads
+bar. Drag tabs to reorder them with an animated slide; double-click a tab (or
+right-click and choose **Rename tab…**) to rename it. The device library refreshes after edits/imports; **Refresh** also reloads
 changes made by another client.
 
 Idle rendering sleeps between events, with a one-second status/lifecycle clock.

@@ -546,12 +546,16 @@ fn build_ui(app: &libadwaita::Application) {
             let user = gtk::Entry::new();
             let cred = gtk::Entry::new();
             cred.set_placeholder_text(Some("credential name (optional)"));
+            let pw = gtk::Entry::new();
+            pw.set_visibility(false);
+            pw.set_placeholder_text(Some("password (saved for this device)"));
             for (i, (lbl, widget)) in [
                 ("Name", name.clone().upcast::<gtk::Widget>()),
                 ("Host", host.clone().upcast()),
                 ("Port", port.clone().upcast()),
                 ("Username", user.clone().upcast()),
                 ("Credential", cred.clone().upcast()),
+                ("Password", pw.clone().upcast()),
             ]
             .into_iter()
             .enumerate()
@@ -565,7 +569,7 @@ fn build_ui(app: &libadwaita::Application) {
             buttons.set_halign(gtk::Align::End);
             buttons.append(&cancel);
             buttons.append(&save);
-            grid.attach(&buttons, 0, 5, 2, 1);
+            grid.attach(&buttons, 0, 6, 2, 1);
 
             let dialog2 = dialog.clone();
             cancel.connect_clicked(move |_| dialog2.close());
@@ -574,21 +578,44 @@ fn build_ui(app: &libadwaita::Application) {
             let list3 = list2.clone();
             let dialog3 = dialog.clone();
             save.connect_clicked(move |_| {
+                let device_name = name.text().to_string();
+                let host_text = host.text().to_string();
+                let username = {
+                    let u = user.text().to_string();
+                    if u.is_empty() {
+                        None
+                    } else {
+                        Some(u)
+                    }
+                };
+                let mut credential_ref = cred.text().to_string();
+                let password = pw.text().to_string();
+                if !password.is_empty() {
+                    let credential_name = credential::device_credential_name(
+                        &ctx3.db,
+                        &device_name,
+                        &host_text,
+                        Some(&credential_ref),
+                    );
+                    if let Err(error) = credential::store_device_password(
+                        &ctx3.db,
+                        &credential_name,
+                        username.as_deref(),
+                        &password,
+                    ) {
+                        eprintln!("failed to save device password: {error}");
+                        return;
+                    }
+                    credential_ref = credential_name;
+                }
                 let input = SavedSessionInput {
                     id: None,
                     folder_id: None,
-                    name: name.text().to_string(),
-                    host: host.text().to_string(),
+                    name: device_name,
+                    host: host_text,
                     port: port.value() as u16,
                     protocol: "ssh".into(),
-                    username: {
-                        let u = user.text().to_string();
-                        if u.is_empty() {
-                            None
-                        } else {
-                            Some(u)
-                        }
-                    },
+                    username,
                     ssh_alias: None,
                     identity_file: None,
                     proxy_jump: None,
@@ -596,13 +623,10 @@ fn build_ui(app: &libadwaita::Application) {
                     description: None,
                     notes: None,
                     settings_override: None,
-                    credential_ref: {
-                        let c = cred.text().to_string();
-                        if c.is_empty() {
-                            None
-                        } else {
-                            Some(c)
-                        }
+                    credential_ref: if credential_ref.is_empty() {
+                        None
+                    } else {
+                        Some(credential_ref)
                     },
                     is_favorite: false,
                     sort_order: None,

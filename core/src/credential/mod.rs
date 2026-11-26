@@ -5,6 +5,7 @@
 //! fallback. Secrets are resolved for explicit connection requests or reveal.
 
 use crate::error::{AppError, AppResult};
+use crate::storage::Database;
 use crate::vault::{self, Vault};
 
 /// Keyring service namespace for OpsTerm secrets.
@@ -129,6 +130,62 @@ pub fn remove(name: &str) -> AppResult<()> {
         let _ = vault::remove_secret_at(&path, name);
     }
     delete(name)
+}
+
+/// Pick the credential name for a device password. An existing reference is
+/// reused; otherwise a readable, unique name is derived from the device and
+/// host so the device form can store a password without opening Credentials.
+pub fn device_credential_name(
+    db: &Database,
+    device_name: &str,
+    host: &str,
+    existing: Option<&str>,
+) -> String {
+    if let Some(name) = existing.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_string();
+    }
+    let device = device_name.trim();
+    let host = host.trim();
+    let base = match (device.is_empty(), host.is_empty()) {
+        (false, false) => format!("{device} ({host})"),
+        (false, true) => device.to_string(),
+        (true, false) => host.to_string(),
+        (true, true) => "device".to_string(),
+    };
+    let mut candidate = base.clone();
+    let mut suffix = 2;
+    while db.get_credential(&candidate).ok().flatten().is_some() {
+        candidate = format!("{base} {suffix}");
+        suffix += 1;
+    }
+    candidate
+}
+
+/// Store a device login password and its metadata. The secret follows the
+/// normal rule: encrypted vault when one exists, otherwise the OS keyring.
+/// Existing tags and kind are preserved when the credential already exists.
+pub fn store_device_password(
+    db: &Database,
+    name: &str,
+    username: Option<&str>,
+    secret: &str,
+) -> AppResult<()> {
+    store(name, secret)?;
+    let existing = db.get_credential(name)?;
+    let kind = existing
+        .as_ref()
+        .map(|record| record.kind.clone())
+        .unwrap_or_else(|| "password".to_string());
+    let tags = existing
+        .as_ref()
+        .map(|record| record.tags.clone())
+        .unwrap_or_default();
+    let username = username
+        .map(str::trim)
+        .filter(|user| !user.is_empty())
+        .map(str::to_string)
+        .or_else(|| existing.and_then(|record| record.username));
+    db.upsert_credential(name, username.as_deref(), &kind, &tags)
 }
 
 /// Copy named keyring secrets into the vault and delete each keyring copy

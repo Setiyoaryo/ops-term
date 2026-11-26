@@ -6,7 +6,7 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
@@ -631,6 +631,8 @@ struct EditorState {
     protocol: String,
     username: String,
     credential: String,
+    password: String,
+    reveal_password: bool,
     pager: String,
     backspace: String,
     login_script: String,
@@ -648,6 +650,8 @@ impl EditorState {
             protocol: "ssh".into(),
             username: String::new(),
             credential: String::new(),
+            password: String::new(),
+            reveal_password: false,
             pager: "none".into(),
             backspace: "del".into(),
             login_script: String::new(),
@@ -669,6 +673,8 @@ impl EditorState {
             protocol: sv.protocol.clone(),
             username: sv.username.clone().unwrap_or_default(),
             credential: sv.credential_ref.clone().unwrap_or_default(),
+            password: String::new(),
+            reveal_password: false,
             pager: ov
                 .get("pager")
                 .and_then(|v| v.as_str())
@@ -1124,6 +1130,8 @@ struct App {
     cred_delete: Option<String>,
     folder_pick: Option<FolderPick>,
     connect_palette: Option<ConnectPalette>,
+    tab_x: HashMap<u64, f32>,
+    tab_rename: Option<TabRenameState>,
     toast: Option<(String, Instant)>,
 }
 
@@ -1133,6 +1141,14 @@ fn truncate_label(value: &str, max: usize) -> String {
     } else {
         format!("{}…", value.chars().take(max).collect::<String>())
     }
+}
+
+fn animate_tab_x(current: f32, target: f32, dt: f32) -> f32 {
+    let delta = target - current;
+    if delta.abs() <= 0.5 {
+        return target;
+    }
+    current + delta * (1.0 - (-dt * 22.0).exp())
 }
 
 fn normalize_search(value: &str) -> String {
@@ -1146,6 +1162,12 @@ fn normalize_search(value: &str) -> String {
 struct ConnectPalette {
     filter: String,
     selected: usize,
+    focus: bool,
+}
+
+struct TabRenameState {
+    id: u64,
+    value: String,
     focus: bool,
 }
 
@@ -1345,6 +1367,8 @@ impl App {
             cred_delete: None,
             folder_pick: None,
             connect_palette: None,
+            tab_x: HashMap::new(),
+            tab_rename: None,
             toast: None,
         };
         app.commands = app.db.list_commands().unwrap_or_default();
@@ -4119,6 +4143,20 @@ impl App {
         };
     }
 
+    fn rename_tab(&mut self, id: u64, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            self.flash = "Tab name cannot be empty".into();
+            return false;
+        }
+        let title: String = name.chars().take(80).collect();
+        if let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) {
+            session.title = title;
+            return true;
+        }
+        false
+    }
+
     fn risky_session_count(&self) -> usize {
         self.sessions
             .iter()
@@ -4868,6 +4906,33 @@ impl App {
         } else {
             Some(serde_json::Value::Object(ov))
         };
+        let mut credential_ref = ed.credential.clone();
+        if ed.protocol != "serial" && !ed.password.is_empty() {
+            let name = opsterm_core::credential::device_credential_name(
+                &self.db,
+                &ed.name,
+                &ed.host,
+                Some(&credential_ref),
+            );
+            let username = {
+                let user = ed.username.trim();
+                if user.is_empty() {
+                    None
+                } else {
+                    Some(user)
+                }
+            };
+            if let Err(error) = opsterm_core::credential::store_device_password(
+                &self.db,
+                &name,
+                username,
+                &ed.password,
+            ) {
+                self.flash = format!("Could not save device password: {error}");
+                return false;
+            }
+            credential_ref = name;
+        }
         let input = SavedSessionInput {
             id: ed.id.clone(),
             folder_id: ed.folder_id.clone(),
@@ -4890,10 +4955,10 @@ impl App {
             description: original.as_ref().and_then(|s| s.description.clone()),
             notes: original.as_ref().and_then(|s| s.notes.clone()),
             settings_override,
-            credential_ref: if ed.credential.is_empty() {
+            credential_ref: if credential_ref.is_empty() {
                 None
             } else {
-                Some(ed.credential.clone())
+                Some(credential_ref)
             },
             is_favorite: original.as_ref().is_some_and(|s| s.is_favorite),
             sort_order: original.as_ref().map(|s| s.sort_order),
@@ -5964,52 +6029,105 @@ impl App {
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
+                                let mut rename_request = None;
+                                let mut animating = false;
                                 for i in 0..self.sessions.len() {
                                     let selected = i == self.active;
-                                    let session = &self.sessions[i];
-                                    let symbol = if session.opening {
+                                    let id = self.sessions[i].id;
+                                    let title = self.sessions[i].title.clone();
+                                    let symbol = if self.sessions[i].opening {
                                         "…"
-                                    } else if session.exited {
+                                    } else if self.sessions[i].exited {
                                         "○"
-                                    } else if session.log_path.is_some() {
+                                    } else if self.sessions[i].log_path.is_some() {
                                         "●"
                                     } else {
                                         "›"
                                     };
-                                    let label = format!("{symbol} {}", session.title);
+                                    let label = format!("{symbol} {title}");
                                     let color = if selected { text_c() } else { muted() };
+                                    let font = egui::TextStyle::Button.resolve(ui.style());
+                                    let text_width = ui.fonts_mut(|fonts| {
+                                        fonts.layout_no_wrap(label.clone(), font, color).size().x
+                                    });
+                                    let button_width = (text_width
+                                        + ui.spacing().button_padding.x * 2.0)
+                                        .max(tab_min);
+                                    let target = ui
+                                        .allocate_exact_size(
+                                            Vec2::new(button_width, 28.0),
+                                            egui::Sense::hover(),
+                                        )
+                                        .0;
+                                    let target_x = target.left();
+                                    let dt = ui.ctx().input(|input| input.stable_dt).min(0.05);
+                                    let current = self.tab_x.entry(id).or_insert(target_x);
+                                    let shift = {
+                                        let next = animate_tab_x(*current, target_x, dt);
+                                        if (next - target_x).abs() < 0.5 {
+                                            target_x
+                                        } else {
+                                            animating = true;
+                                            next
+                                        }
+                                    };
+                                    *current = shift;
+                                    let dx = shift - target_x;
+                                    let shifted = target.translate(Vec2::new(dx, 0.0));
                                     let response = ui
-                                        .push_id(("tab", session.id), |ui| {
-                                            ui.add(
+                                        .push_id(("tab", id), |ui| {
+                                            ui.put(
+                                                shifted,
                                                 egui::Button::selectable(
                                                     selected,
                                                     egui::RichText::new(label).color(color),
                                                 )
                                                 .sense(egui::Sense::click_and_drag())
                                                 .corner_radius(3)
-                                                .min_size(Vec2::new(tab_min, 28.0)),
+                                                .min_size(Vec2::new(button_width, 28.0)),
                                             )
                                         })
                                         .inner;
                                     if selected {
                                         ui.painter().hline(
-                                            response.rect.x_range(),
-                                            response.rect.bottom() - 1.0,
+                                            shifted.x_range(),
+                                            shifted.bottom() - 1.0,
                                             Stroke::new(2.0, accent()),
                                         );
                                     }
-                                    response.dnd_set_drag_payload(session.id);
+                                    response.dnd_set_drag_payload(id);
                                     if response.clicked() {
                                         self.active = i;
-                                        self.terminal_focus = Some(self.sessions[i].id);
+                                        self.terminal_focus = Some(id);
                                     }
+                                    if response.double_clicked() {
+                                        rename_request = Some(id);
+                                    }
+                                    response.context_menu(|ui| {
+                                        if ui.button("Rename tab…").clicked() {
+                                            rename_request = Some(id);
+                                            ui.close();
+                                        }
+                                        if ui.button("Close tab").clicked() {
+                                            remove = Some(id);
+                                            ui.close();
+                                        }
+                                    });
                                     if let Some(payload) = response.dnd_release_payload::<u64>() {
-                                        if *payload != self.sessions[i].id {
-                                            reorder = Some((*payload, self.sessions[i].id));
+                                        if *payload != id {
+                                            reorder = Some((*payload, id));
                                         }
                                     }
-                                    let (close_rect, close_response) = ui.allocate_exact_size(
-                                        Vec2::splat(20.0),
+                                    let close_target = ui
+                                        .allocate_exact_size(
+                                            Vec2::splat(20.0),
+                                            egui::Sense::hover(),
+                                        )
+                                        .0;
+                                    let close_rect = close_target.translate(Vec2::new(dx, 0.0));
+                                    let close_response = ui.interact(
+                                        close_rect,
+                                        ui.make_persistent_id(("tab-close", id)),
                                         egui::Sense::click(),
                                     );
                                     let close_hovered = close_response.hovered();
@@ -6032,12 +6150,31 @@ impl App {
                                         },
                                     );
                                     if close_response
-                                        .on_hover_text(format!("Close {}", self.sessions[i].title))
+                                        .on_hover_text(format!("Close {title}"))
                                         .clicked()
                                     {
-                                        remove = Some(self.sessions[i].id);
+                                        remove = Some(id);
                                     }
                                 }
+                                if animating {
+                                    ui.ctx().request_repaint();
+                                }
+                                if let Some(id) = rename_request {
+                                    let title = self
+                                        .sessions
+                                        .iter()
+                                        .find(|session| session.id == id)
+                                        .map(|session| session.title.clone())
+                                        .unwrap_or_default();
+                                    self.tab_rename = Some(TabRenameState {
+                                        id,
+                                        value: title,
+                                        focus: true,
+                                    });
+                                }
+                                let live: Vec<u64> =
+                                    self.sessions.iter().map(|session| session.id).collect();
+                                self.tab_x.retain(|id, _| live.contains(id));
                             });
                         });
                     if let Some((from, to)) = reorder {
@@ -6918,6 +7055,29 @@ impl App {
                             }
                         }
                     });
+                    if ed.protocol != "serial" {
+                        ui.horizontal(|ui| {
+                            ui.label("Password");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut ed.password)
+                                    .password(!ed.reveal_password)
+                                    .desired_width(226.0)
+                                    .hint_text(if ed.credential.is_empty() {
+                                        "save for this device"
+                                    } else {
+                                        "leave blank to keep current"
+                                    }),
+                            );
+                            ui.checkbox(&mut ed.reveal_password, "Show");
+                        });
+                        ui.label(
+                            egui::RichText::new(
+                                "A password typed here is saved for this device, so reconnects after a restart do not ask again.",
+                            )
+                            .small()
+                            .color(muted()),
+                        );
+                    }
                     ui.horizontal(|ui| {
                         ui.label("Pager");
                         egui::ComboBox::from_id_salt("ed-pager")
@@ -7718,6 +7878,7 @@ impl App {
             }
         }
 
+        self.tab_rename_window(&ctx);
         self.folder_windows(&ctx);
         self.update_window(&ctx);
         if !close_drawn_early {
@@ -7725,6 +7886,53 @@ impl App {
         }
         if !self.close_input_blocked && !self.close_confirmation.active() {
             self.close_confirmation.remember_background_focus(&ctx);
+        }
+    }
+
+    fn tab_rename_window(&mut self, ctx: &egui::Context) {
+        let Some(mut rename) = self.tab_rename.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut commit = false;
+        let mut cancel = false;
+        egui::Window::new("Rename tab")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Tab name").small().color(muted()));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut rename.value)
+                        .hint_text("Terminal title")
+                        .desired_width(320.0),
+                );
+                if rename.focus {
+                    response.request_focus();
+                    rename.focus = false;
+                }
+                if response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
+                let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!rename.value.trim().is_empty(), egui::Button::new("Rename"))
+                        .clicked()
+                        || enter
+                    {
+                        commit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if commit && self.rename_tab(rename.id, &rename.value) {
+            self.flash = format!("renamed tab to {}", rename.value.trim());
+        } else if open && !cancel {
+            rename.focus = false;
+            self.tab_rename = Some(rename);
         }
     }
 
@@ -9709,6 +9917,29 @@ mod tests {
             }
             assert_eq!(selected, Some(0), "row click at y={y} was lost");
         }
+    }
+
+    #[test]
+    fn tab_slide_animation_eases_without_overshooting() {
+        let mut x = 0.0;
+        for _ in 0..120 {
+            let next = animate_tab_x(x, 100.0, 1.0 / 60.0);
+            assert!(next >= x && next <= 100.0);
+            x = next;
+        }
+        assert_eq!(x, 100.0);
+    }
+
+    #[test]
+    fn renaming_a_tab_updates_its_title_and_rejects_empty_names() {
+        let mut app = test_app();
+        app.sessions.push(test_session(std::io::empty()).0);
+        let id = app.sessions[0].id;
+        assert!(app.rename_tab(id, "  Core switch  "));
+        assert_eq!(app.sessions[0].title, "Core switch");
+        assert!(!app.rename_tab(id, "   "));
+        assert_eq!(app.sessions[0].title, "Core switch");
+        assert!(!app.rename_tab(id + 1, "missing"));
     }
 
     #[test]

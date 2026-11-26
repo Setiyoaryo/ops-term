@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { credentialsList, serialDevicesList } from "../../lib/ipc";
+import { credentialSet, credentialsList, serialDevicesList } from "../../lib/ipc";
 import { findVendor, VENDOR_PROFILES } from "../../lib/vendors";
 import { useHighlights } from "../../state/highlight";
 import { useLibrary } from "../../state/library";
@@ -56,6 +56,26 @@ function flattenFolders(folders: Folder[], depth = 0): { id: string; label: stri
   return out;
 }
 
+function deviceCredentialName(
+  deviceName: string,
+  host: string,
+  existing: string,
+  taken: string[],
+): string {
+  if (existing.trim()) return existing.trim();
+  const base =
+    deviceName.trim() && host.trim()
+      ? `${deviceName.trim()} (${host.trim()})`
+      : deviceName.trim() || host.trim() || "device";
+  let candidate = base;
+  let suffix = 2;
+  while (taken.includes(candidate)) {
+    candidate = `${base} ${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
 export function SessionEditor({
   session,
   defaultFolderId,
@@ -95,6 +115,7 @@ export function SessionEditor({
   const [credentialRef, setCredentialRef] = useState<string>(
     session?.credentialRef ?? "",
   );
+  const [password, setPassword] = useState("");
   const override = (session?.settingsOverride ?? {}) as Record<string, unknown>;
   const [backspace, setBackspace] = useState<"del" | "bs">(
     (override.backspace as "del" | "bs") ?? "del",
@@ -182,6 +203,28 @@ export function SessionEditor({
     if (isSerial) {
       settingsOverride.serial = { baud, dataBits, parity, stopBits, flowControl, newline };
     }
+    let nextCredentialRef = credentialRef;
+    if (!isSerial && password) {
+      const credentialName = deviceCredentialName(
+        name,
+        host,
+        credentialRef,
+        credentials.map((c) => c.name),
+      );
+      try {
+        await credentialSet(
+          credentialName,
+          password,
+          username.trim() || null,
+          "password",
+          [],
+        );
+        nextCredentialRef = credentialName;
+      } catch (e) {
+        setError(String(e));
+        return;
+      }
+    }
     const input: SavedSessionInput = {
       id: session?.id ?? null,
       folderId,
@@ -199,7 +242,7 @@ export function SessionEditor({
       description: description.trim() || null,
       notes: notes.trim() || null,
       settingsOverride,
-      credentialRef: isSerial ? null : credentialRef || null,
+      credentialRef: isSerial ? null : nextCredentialRef || null,
       isFavorite: favorite,
       sortOrder: session?.sortOrder ?? null,
     };
@@ -288,6 +331,23 @@ export function SessionEditor({
                   </option>
                 ))}
               </select>
+              <input
+                className={field}
+                type="password"
+                data-testid="field-password"
+                placeholder={
+                  session?.credentialRef
+                    ? "Leave blank to keep the saved password"
+                    : "Password (saved for this device)"
+                }
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <span className="text-[#5C6370]">
+                A password typed here is stored in the credential vault and
+                linked to this device, so you do not need to open Tools →
+                Credentials or retype it after a restart.
+              </span>
               {selectedCred && (
                 <span className="text-[#5C6370]">
                   {selectedCred.tags.length > 0 && (
@@ -304,7 +364,8 @@ export function SessionEditor({
               )}
               {credentials.length === 0 && (
                 <span className="text-[#5C6370]">
-                  Add credentials in Tools → Credentials, then reference one here.
+                  No saved credentials yet. Type a password above; it will be
+                  saved and linked to this device automatically.
                 </span>
               )}
             </label>
